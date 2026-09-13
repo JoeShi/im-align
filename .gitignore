@@ -1,0 +1,14 @@
+# Local runtime artifacts for the new Skill
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+
+# Local sensitive configuration from the legacy Go implementation
+im-align.yaml
+im-align.db
+
+# Installed agent skills (restore from skills-lock.json with your skills installer)
+.agents/skills/
+.claude/skills/

@@ -1,0 +1,13 @@
+[project]
+name = "im-align-skill"
+version = "0.2.0"
+description = "Bridge Agent Skill-driven requirements Alignment into a Feishu/Lark Thread"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "lark-oapi==1.7.3",
+  "PyYAML==6.0.2",
+]
+
+[tool.uv]
+package = false

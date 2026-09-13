@@ -1,0 +1,5 @@
+interface:
+  display_name: "IM Align"
+  short_description: "Align requirements with multiple participants in a Feishu/Lark Thread and produce a Spec"
+policy:
+  allow_implicit_invocation: true
