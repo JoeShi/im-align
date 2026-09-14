@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from scripts import bridge
 from scripts.im_align import config
 
 
@@ -43,9 +44,9 @@ class ConfigLoadTests(unittest.TestCase):
         return {
             "providers": {
                 "feishu": {
+                    "type": "feishu",
                     "app_id": "cli_test",
                     "app_secret": "secret",
-                    "domain": "feishu",
                 }
             },
             "defaults": defaults or {},
@@ -83,7 +84,7 @@ class ConfigLoadTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(loaded["im"], {"provider": "feishu", "chat_id": "oc_repo"})
+            self.assertEqual(loaded["im"], {"provider": "feishu", "type": "feishu", "chat_id": "oc_repo"})
             self.assertEqual(
                 loaded["agent"],
                 {
@@ -115,11 +116,149 @@ class ConfigLoadTests(unittest.TestCase):
 
             loaded = config.load(cwd, {"chat_id": "oc_cli"})
 
-            self.assertEqual(loaded["im"], {"provider": "feishu", "chat_id": "oc_cli"})
+            self.assertEqual(loaded["im"], {"provider": "feishu", "type": "feishu", "chat_id": "oc_cli"})
             self.assertEqual(loaded["agent"]["backend"], "opencode")
             self.assertEqual(loaded["agent"]["skill"], "grill-with-docs")
             self.assertEqual(loaded["timeouts"]["debounce_seconds"], 5)
             self.assertEqual(loaded["approval"], {"mode": "callback"})
+            self.assertEqual(loaded["feishu_domain"], "feishu")
+
+    def test_named_lark_provider_can_be_selected_by_key(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                {
+                    "providers": {
+                        "intl": {
+                            "type": "lark",
+                            "app_id": "cli_lark",
+                            "app_secret": "secret",
+                        }
+                    },
+                    "defaults": {"im": {"provider": "intl", "chat_id": "oc_lark"}},
+                }
+            )
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"], {"provider": "intl", "type": "lark", "chat_id": "oc_lark"})
+            self.assertEqual(loaded["feishu_app_id"], "cli_lark")
+            self.assertEqual(loaded["feishu_domain"], "larksuite")
+
+    def test_cli_provider_override_selects_named_provider(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config({"im": {"provider": "work", "chat_id": "oc_user"}})
+            data["providers"] = {
+                "work": {
+                    "type": "feishu",
+                    "app_id": "cli_work",
+                    "app_secret": "secret",
+                },
+                "intl": {
+                    "type": "lark",
+                    "app_id": "cli_intl",
+                    "app_secret": "secret",
+                },
+            }
+            self.write_user_config(data)
+
+            loaded = config.load(cwd, {"provider": "intl"})
+
+            self.assertEqual(loaded["im"]["provider"], "intl")
+            self.assertEqual(loaded["im"]["type"], "lark")
+            self.assertEqual(loaded["feishu_app_id"], "cli_intl")
+
+    def test_start_parser_forwards_provider_override(self):
+        args = bridge.build_parser().parse_args(["start", "topic", "--provider", "intl"])
+
+        self.assertEqual(bridge._overrides(args)["provider"], "intl")
+
+    def test_repository_provider_selection_overrides_user_default(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config({"im": {"provider": "work", "chat_id": "oc_user"}})
+            data["providers"] = {
+                "work": {
+                    "type": "feishu",
+                    "app_id": "cli_work",
+                    "app_secret": "secret",
+                },
+                "intl": {
+                    "type": "lark",
+                    "app_id": "cli_intl",
+                    "app_secret": "secret",
+                },
+            }
+            self.write_user_config(data)
+            self.write_repo_config(cwd, {"im": {"provider": "intl"}})
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"]["provider"], "intl")
+            self.assertEqual(loaded["im"]["type"], "lark")
+            self.assertEqual(loaded["feishu_app_id"], "cli_intl")
+
+    def test_multiple_providers_require_explicit_selection(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config({"im": {"chat_id": "oc_user"}})
+            data["providers"]["intl"] = {
+                "type": "lark",
+                "app_id": "cli_intl",
+                "app_secret": "secret",
+            }
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "multiple IM providers"):
+                config.load(cwd)
+
+    def test_unknown_provider_selection_fails(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"im": {"provider": "missing", "chat_id": "oc_user"}}))
+
+            with self.assertRaisesRegex(config.ConfigError, "does not exist"):
+                config.load(cwd)
+
+    def test_provider_domain_is_not_user_facing_schema(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config({"im": {"chat_id": "oc_user"}})
+            data["providers"]["feishu"]["domain"] = "feishu"
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "providers.feishu.domain"):
+                config.load(cwd)
+
+    def test_provider_type_and_credentials_are_required(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                {
+                    "providers": {
+                        "work": {
+                            "type": "slack",
+                            "app_id": "cli_work",
+                            "app_secret": "secret",
+                        }
+                    },
+                    "defaults": {"im": {"chat_id": "oc_user"}},
+                }
+            )
+
+            with self.assertRaisesRegex(config.ConfigError, "providers.work.type"):
+                config.load(cwd)
+
+    def test_provider_credentials_are_required(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                {
+                    "providers": {
+                        "work": {
+                            "type": "feishu",
+                            "app_id": "cli_work",
+                        }
+                    },
+                    "defaults": {"im": {"chat_id": "oc_user"}},
+                }
+            )
+
+            with self.assertRaisesRegex(config.ConfigError, "providers.work.app_secret"):
+                config.load(cwd)
 
     def test_grouped_section_must_be_mapping(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:

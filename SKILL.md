@@ -35,6 +35,7 @@ Determine these values from the current conversation and repository context:
 - `skill`: default to `grill-with-docs`; change it only when the user explicitly specifies another Skill.
 - `backend`: default to the configured value; first-time setup defaults to `opencode`.
 - `model`: optional; when omitted, keep the backend's current model.
+- `provider`: prefer the configured IM provider; use `--provider` only when the user provides a temporary provider-key override.
 - `chat_id`: prefer the configured default; use `--chat` only when the user provides a temporary override.
 - `initiator`: usually resolve automatically from same-app lark-cli, git email, or an interactive terminal prompt. open_id values from other apps cannot be reused; do not ask the user to provide one manually without reason.
 
@@ -64,7 +65,7 @@ Pass user-provided text safely as one shell argument; do not build commands by s
 uv run --project "$SKILL_DIR" python "$SKILL_DIR/scripts/bridge.py" start "$TOPIC" --json
 ```
 
-Append `--skill`, `--chat`, `--backend`, `--model`, and `--initiator` only when the user specified them. After success, immediately tell the user the run_id, how to participate in the Feishu/Lark group by replying in the new Thread and mentioning the bot, and that the Bridge is running in the background.
+Append `--skill`, `--provider`, `--chat`, `--backend`, `--model`, and `--initiator` only when the user specified them. After success, immediately tell the user the run_id, how to participate in the Feishu/Lark group by replying in the new Thread and mentioning the bot, and that the Bridge is running in the background.
 
 ### 4. Bounded Wait
 

@@ -43,6 +43,7 @@ def build_parser():
     s = sub.add_parser("start", help="start an Alignment Session and return run_id immediately")
     s.add_argument("topic", help="Alignment topic")
     s.add_argument("--skill", default=None, help="Alignment Skill; default is grill-with-docs")
+    s.add_argument("--provider", default=None, help="configured IM provider key")
     s.add_argument("--chat", default=None, help="Feishu/Lark group chat_id (oc_...)")
     s.add_argument("--backend", default=None, choices=["opencode", "trae-cli", "kiro-cli", "kimi"])
     s.add_argument("--model", default=None, help="model identifier; omit to keep the Agent's current selection")
@@ -125,19 +126,23 @@ def cmd_setup(args):
     existing = _read_existing_setup(path)
     old_provider = (existing.get("providers") or {}).get("feishu") or {}
     old_defaults = existing.get("defaults") or {}
+    old_type = old_provider.get("type")
+    if not old_type:
+        old_type = "lark" if old_provider.get("domain") == "larksuite" else "feishu"
 
     print("Feishu/Lark custom app configuration; see references/feishu-setup.md")
     app_id = _prompt("app_id (cli_...)", old_provider.get("app_id", ""))
     app_secret = _prompt("app_secret (leave blank to keep current value)", old_provider.get("app_secret", ""), secret=True)
-    domain = _prompt("domain feishu/larksuite", old_provider.get("domain", "feishu"))
+    provider_type = _prompt("type feishu/lark", old_type)
     chat_id = _prompt("default group chat_id (oc_..., optional)", old_defaults.get("chat_id", ""))
     backend = _prompt("default Agent Backend opencode/trae-cli/kiro-cli/kimi", old_defaults.get("backend", "opencode"))
+    domain = cfgmod.PROVIDER_TYPE_DOMAINS.get(provider_type, "")
 
     data = dict(existing)
     providers = dict(data.get("providers") or {})
-    providers["feishu"] = {"app_id": app_id, "app_secret": app_secret, "domain": domain}
+    providers["feishu"] = {"type": provider_type, "app_id": app_id, "app_secret": app_secret}
     defaults = dict(data.get("defaults") or {})
-    defaults.update({"chat_id": chat_id, "backend": backend})
+    defaults.update({"provider": "feishu", "chat_id": chat_id, "backend": backend})
     data.update({"providers": providers, "defaults": defaults})
 
     # Fully validate the candidate before atomic replacement; invalid input must not corrupt existing config.
@@ -145,7 +150,9 @@ def cmd_setup(args):
     candidate.update(defaults)
     candidate.update(
         {
+            "provider": "feishu",
             "chat_id": chat_id or "oc_setup_validation",
+            "provider_type": provider_type,
             "feishu_app_id": app_id,
             "feishu_app_secret": app_secret,
             "feishu_domain": domain,
@@ -202,6 +209,7 @@ def _now_iso():
 def _overrides(args):
     return {
         "skill": getattr(args, "skill", None),
+        "provider": getattr(args, "provider", None),
         "chat_id": getattr(args, "chat", None),
         "backend": getattr(args, "backend", None),
         "model": getattr(args, "model", None),
@@ -243,6 +251,7 @@ def _prepare_record(args):
         "run_id": state.new_run_id(),
         "state": state.STATE_STARTING,
         "topic": args.topic.strip(),
+        "provider": config["im"]["provider"],
         "skill": agent["skill"],
         "chat_id": config["im"]["chat_id"],
         "backend": agent["backend"],
@@ -562,6 +571,7 @@ def _execute_record(run_id, resume=None):
                 record["cwd"],
                 {
                     "skill": record["skill"],
+                    "provider": record.get("provider", ""),
                     "chat_id": record["chat_id"],
                     "backend": record["backend"],
                     "model": record.get("model", ""),

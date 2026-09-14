@@ -11,6 +11,13 @@ BACKEND_KIRO_CLI = "kiro-cli"
 BACKEND_KIMI = "kimi"
 POLICY_CALLBACK = "callback"
 POLICY_AUTO_ALLOW = "auto_allow"
+PROVIDER_FEISHU = "feishu"
+PROVIDER_LARK = "lark"
+
+PROVIDER_TYPE_DOMAINS = {
+    PROVIDER_FEISHU: "feishu",
+    PROVIDER_LARK: "larksuite",
+}
 
 TIMEOUT_KEYS = (
     "debounce_seconds",
@@ -20,7 +27,7 @@ TIMEOUT_KEYS = (
 )
 
 DEFAULTS = {
-    "provider": "feishu",
+    "provider": "",
     "chat_id": "",
     "backend": BACKEND_OPENCODE,
     "model": "",
@@ -123,6 +130,47 @@ def _read_section(value):
     return value
 
 
+def _read_providers(value):
+    providers = _read_section(value)
+    normalized = {}
+    for key, provider in providers.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ConfigError("provider keys must be non-empty strings")
+        if not isinstance(provider, dict):
+            raise ConfigError(f"providers.{key} must be a mapping")
+        bad = set(provider) - {"type", "app_id", "app_secret"}
+        if bad:
+            bad_keys = ", ".join(f"providers.{key}.{name}" for name in sorted(bad))
+            raise ConfigError(f"user config contains unsupported provider keys: {bad_keys}")
+        provider_type = provider.get("type")
+        if provider_type not in PROVIDER_TYPE_DOMAINS:
+            raise ConfigError(f"providers.{key}.type must be feishu or lark")
+        app_id = provider.get("app_id")
+        app_secret = provider.get("app_secret")
+        if not isinstance(app_id, str) or not app_id:
+            raise ConfigError(f"providers.{key}.app_id must be a non-empty string")
+        if not isinstance(app_secret, str) or not app_secret:
+            raise ConfigError(f"providers.{key}.app_secret must be a non-empty string")
+        normalized[key] = {
+            "type": provider_type,
+            "app_id": app_id,
+            "app_secret": app_secret,
+        }
+    return normalized
+
+
+def _resolve_provider_key(configured_key, providers):
+    if configured_key:
+        if configured_key not in providers:
+            raise ConfigError(f"configured IM provider {configured_key!r} does not exist in user config providers")
+        return configured_key
+    if len(providers) == 1:
+        return next(iter(providers))
+    if providers:
+        raise ConfigError("multiple IM providers are configured; select one with defaults.im.provider, .im-align.yaml im.provider, or --provider")
+    raise ConfigError(f"missing Feishu/Lark credentials; run `bridge.py setup` first to write {user_config_path()}")
+
+
 def _normalize_grouped_layer(data, source):
     """Accept grouped config while reusing the existing flat validation keys."""
     normalized = {}
@@ -171,6 +219,7 @@ def _with_grouped_sections(cfg):
         grouped["initiator"] = cfg["initiator"]
     grouped["im"] = {
         "provider": cfg["provider"],
+        "type": cfg["provider_type"],
         "chat_id": cfg["chat_id"],
     }
     grouped["agent"] = {
@@ -219,18 +268,23 @@ def load(cwd, cli_overrides=None):
     merged.update({k: v for k, v in repo.items() if v is not None})
     merged.update({k: v for k, v in cli_overrides.items() if v is not None})
 
-    providers = user.get("providers") or {}
-    feishu = _read_section(providers.get("feishu"))
-    merged["feishu_app_id"] = feishu.get("app_id", "")
-    merged["feishu_app_secret"] = feishu.get("app_secret", "")
-    merged["feishu_domain"] = feishu.get("domain", "feishu")
+    providers = _read_providers(user.get("providers"))
+    provider_key = _resolve_provider_key(merged.get("provider", ""), providers)
+    provider = providers[provider_key]
+    merged["provider"] = provider_key
+    merged["provider_type"] = provider["type"]
+    merged["feishu_app_id"] = provider["app_id"]
+    merged["feishu_app_secret"] = provider["app_secret"]
+    merged["feishu_domain"] = PROVIDER_TYPE_DOMAINS[provider["type"]]
     validate(merged)
     return _with_grouped_sections(merged)
 
 
 def validate(cfg):
-    if cfg["provider"] != "feishu":
-        raise ConfigError(f"unsupported IM Provider: {cfg['provider']}; v1 supports only feishu")
+    if not isinstance(cfg["provider"], str) or not cfg["provider"]:
+        raise ConfigError("im.provider must resolve to a non-empty provider key")
+    if cfg["provider_type"] not in PROVIDER_TYPE_DOMAINS:
+        raise ConfigError("provider type must be feishu or lark")
     if not cfg["feishu_app_id"] or not cfg["feishu_app_secret"]:
         raise ConfigError(f"missing Feishu/Lark credentials; run `bridge.py setup` first to write {user_config_path()}")
     if cfg["feishu_domain"] not in ("feishu", "larksuite"):

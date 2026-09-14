@@ -9,10 +9,11 @@ Path: `~/.config/im-align/config.yaml`; it follows `XDG_CONFIG_HOME` and must be
 ```yaml
 providers:
   feishu:
+    type: feishu # or lark
     app_id: cli_xxx
     app_secret: xxx
-    domain: feishu # or larksuite
 defaults:
+  provider: feishu
   chat_id: oc_xxx
   backend: opencode # or trae-cli / kiro-cli / kimi
   skill: grill-with-docs
