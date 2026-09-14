@@ -12,6 +12,7 @@ Use the Python Bridge bundled with this Skill to start an independent Agent Back
 - The current working directory must be the git worktree the user wants to align. Do not accept remote URLs, clone repositories, or switch to another repository.
 - Feishu/Lark App Secret may be written only to user-level `~/.config/im-align/config.yaml`. It must not appear in replies, command arguments, repository files, or log excerpts.
 - The default permission policy is `callback`. Do not proactively recommend `auto_allow`; do not bypass Feishu/Lark Approval cards unless the user explicitly chooses it.
+- Repository `.im-align.yaml` may select `im.provider`, `im.chat_id`, and `agent.command_alias`, but provider credentials and real executable commands live only in user-level config.
 - Run at most one Alignment on a machine at a time. If a run already exists, use `status` or `wait`; do not start a second Bridge.
 - After Alignment completes, report only the Spec and continuation commands. Do not start coding.
 
@@ -37,6 +38,8 @@ Determine these values from the current conversation and repository context:
 - `model`: optional; when omitted, keep the backend's current model.
 - `provider`: prefer the configured IM provider; use `--provider` only when the user provides a temporary provider-key override.
 - `chat_id`: prefer the configured default; use `--chat` only when the user provides a temporary override.
+- `command_alias`: prefer the configured trusted command alias; use `--command-alias` only when the user provides a temporary override.
+- `approval`: default to `callback`; use `--approval auto_allow --acknowledge-auto-allow` only when the user explicitly accepts the risk.
 - `initiator`: usually resolve automatically from same-app lark-cli, git email, or an interactive terminal prompt. open_id values from other apps cannot be reused; do not ask the user to provide one manually without reason.
 
 If the topic is unclear, ask only for the topic. Do not create extra questions when the other values have safe defaults.
@@ -65,7 +68,7 @@ Pass user-provided text safely as one shell argument; do not build commands by s
 uv run --project "$SKILL_DIR" python "$SKILL_DIR/scripts/bridge.py" start "$TOPIC" --json
 ```
 
-Append `--skill`, `--provider`, `--chat`, `--backend`, `--model`, and `--initiator` only when the user specified them. After success, immediately tell the user the run_id, how to participate in the Feishu/Lark group by replying in the new Thread and mentioning the bot, and that the Bridge is running in the background.
+Append `--skill`, `--provider`, `--chat`, `--backend`, `--model`, `--command-alias`, `--approval`, `--acknowledge-auto-allow`, and `--initiator` only when the user specified them. After success, immediately tell the user the run_id, how to participate in the Feishu/Lark group by replying in the new Thread and mentioning the bot, and that the Bridge is running in the background.
 
 ### 4. Bounded Wait
 

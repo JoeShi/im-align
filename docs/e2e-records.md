@@ -2,6 +2,17 @@
 
 This file appends historical end-to-end verification records by date, including run_id, observations, and verdicts. Verification methods and acceptance matrices are maintained in `docs/steering/e2e-test.md`; this file records status only and does not define rules.
 
+## Grouped Configuration Verification (2026-09-14)
+
+The grouped configuration redesign was verified through automated unit and smoke coverage without real Feishu/Lark network calls:
+
+- Config resolution tests passed for provider selection, single-provider auto-selection, multi-provider ambiguity, missing providers, CLI provider override, chat fallback, and missing chat ID.
+- Strict schema tests passed for user-level unknown fields, old flat defaults, repository old flat fields, repository credentials, repository `providers`, and repository raw command plans.
+- Approval tests passed for repository callback tightening, repository `auto_allow` rejection, user-level `auto_allow`, and CLI `auto_allow` risk acknowledgement.
+- Command alias tests passed for alias resolution, missing aliases, backend mismatch, default empty args, dangerous argv rejection, and built-in backend argv fallback.
+- Provider construction smoke tests instantiated Feishu and Lark providers from resolved grouped config without starting long connections or sending group messages.
+- Verification commands passed: `uv sync --frozen`, `uv run --frozen python -m unittest tests.test_config`, Python compile checks, `uv run --frozen python scripts/bridge.py --help`, and `git diff --check`.
+
 ## Real-Machine Verification Record (2026-09-12)
 
 Using the `im-align-dev` Feishu/Lark test group and opencode 1.18.30, the Skill-native path completed a smoke run:
