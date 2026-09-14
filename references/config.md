@@ -12,12 +12,15 @@ providers:
     type: feishu # or lark
     app_id: cli_xxx
     app_secret: xxx
+    default_chat_id: oc_fallback
 defaults:
-  provider: feishu
-  chat_id: oc_xxx
-  backend: opencode # or trae-cli / kiro-cli / kimi
-  skill: grill-with-docs
-  model: ""
+  im:
+    provider: feishu
+    chat_id: oc_xxx
+  agent:
+    backend: opencode # or trae-cli / kiro-cli / kimi
+    skill: grill-with-docs
+    model: ""
 ```
 
 Prefer generating this interactively with `python scripts/bridge.py setup`. Do not place secrets manually on the command line.
@@ -27,15 +30,20 @@ Prefer generating this interactively with `python scripts/bridge.py setup`. Do n
 Path: `.im-align.yaml` at the current git worktree root. It may be committed, but must not contain credentials:
 
 ```yaml
-chat_id: oc_xxx
-backend: opencode
-model: ""
-skill: grill-with-docs
-debounce_seconds: 5
-approval_timeout_seconds: 600
-turn_timeout_seconds: 300
-idle_timeout_seconds: 1800
-permission: callback
+im:
+  provider: feishu
+  chat_id: oc_xxx
+agent:
+  backend: opencode
+  model: ""
+  skill: grill-with-docs
+timeouts:
+  debounce_seconds: 5
+  approval_timeout_seconds: 600
+  turn_timeout_seconds: 300
+  idle_timeout_seconds: 1800
+approval:
+  mode: callback
 # Optional; avoids resolving identity each time. open_id must belong to
 # the Feishu/Lark app used by the im-align bot.
 # This is personal information; confirm team policy before committing.
@@ -45,10 +53,7 @@ initiator:
   name: Developer
 ```
 
-Other allowed override fields:
-
-- `command` + `args`: override the whole backend argv; both must be configured, and the caller is responsible for all arguments.
-- `permission: auto_allow`: automatically selects the allow option provided by the Agent, bypassing manual Feishu/Lark Approval. Use only when the user explicitly accepts the risk.
+Repository config is strict: old flat fields, `providers`, `app_id`, `app_secret`, `agent.command`, and `agent.args` are rejected.
 
 The Bridge rejects startup when argv contains known dangerous parameters such as `bypass_permissions`, `--yolo`, `trust-all-tools`, or `trust-tools`.
 

@@ -1,8 +1,11 @@
+import io
 import os
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import yaml
 
@@ -144,6 +147,68 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertEqual(loaded["feishu_app_id"], "cli_lark")
             self.assertEqual(loaded["feishu_domain"], "larksuite")
 
+    def test_provider_default_chat_id_is_final_fallback(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                {
+                    "providers": {
+                        "work": {
+                            "type": "feishu",
+                            "app_id": "cli_work",
+                            "app_secret": "secret",
+                            "default_chat_id": "oc_provider",
+                        }
+                    },
+                    "defaults": {},
+                }
+            )
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"]["chat_id"], "oc_provider")
+
+    def test_chat_resolution_priority(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                {
+                    "providers": {
+                        "work": {
+                            "type": "feishu",
+                            "app_id": "cli_work",
+                            "app_secret": "secret",
+                            "default_chat_id": "oc_provider",
+                        }
+                    },
+                    "defaults": {"im": {"chat_id": "oc_user"}},
+                }
+            )
+            self.write_repo_config(cwd, {"im": {"chat_id": "oc_repo"}})
+
+            loaded = config.load(cwd, {"chat_id": "oc_cli"})
+
+            self.assertEqual(loaded["im"]["chat_id"], "oc_cli")
+
+    def test_repository_chat_overrides_user_and_provider_chat(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                {
+                    "providers": {
+                        "work": {
+                            "type": "feishu",
+                            "app_id": "cli_work",
+                            "app_secret": "secret",
+                            "default_chat_id": "oc_provider",
+                        }
+                    },
+                    "defaults": {"im": {"chat_id": "oc_user"}},
+                }
+            )
+            self.write_repo_config(cwd, {"im": {"chat_id": "oc_repo"}})
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"]["chat_id"], "oc_repo")
+
     def test_cli_provider_override_selects_named_provider(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config({"im": {"provider": "work", "chat_id": "oc_user"}})
@@ -171,6 +236,50 @@ class ConfigLoadTests(unittest.TestCase):
         args = bridge.build_parser().parse_args(["start", "topic", "--provider", "intl"])
 
         self.assertEqual(bridge._overrides(args)["provider"], "intl")
+
+    def test_setup_writes_grouped_defaults_and_drops_legacy_root_keys(self):
+        with isolated_config_home():
+            self.write_user_config(
+                {
+                    "providers": {
+                        "feishu": {
+                            "app_id": "cli_old",
+                            "app_secret": "old_secret",
+                            "domain": "larksuite",
+                        }
+                    },
+                    "defaults": {
+                        "chat_id": "oc_old",
+                        "backend": "opencode",
+                    },
+                    "legacy": "drop",
+                }
+            )
+
+            with (
+                mock.patch("builtins.input", side_effect=["", "", "", "", ""]),
+                mock.patch("getpass.getpass", return_value=""),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(bridge.cmd_setup(SimpleNamespace()), 0)
+
+            written = yaml.safe_load(Path(config.user_config_path()).read_text(encoding="utf-8"))
+            self.assertNotIn("legacy", written)
+            self.assertEqual(
+                written["defaults"],
+                {
+                    "im": {"provider": "feishu", "chat_id": "oc_old"},
+                    "agent": {"backend": "opencode"},
+                },
+            )
+            self.assertEqual(
+                written["providers"]["feishu"],
+                {
+                    "type": "lark",
+                    "app_id": "cli_old",
+                    "app_secret": "old_secret",
+                },
+            )
 
     def test_repository_provider_selection_overrides_user_default(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -260,6 +369,13 @@ class ConfigLoadTests(unittest.TestCase):
             with self.assertRaisesRegex(config.ConfigError, "providers.work.app_secret"):
                 config.load(cwd)
 
+    def test_missing_chat_id_fails_after_all_fallbacks(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config())
+
+            with self.assertRaisesRegex(config.ConfigError, "chat_id"):
+                config.load(cwd)
+
     def test_grouped_section_must_be_mapping(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
@@ -274,6 +390,48 @@ class ConfigLoadTests(unittest.TestCase):
             self.write_repo_config(cwd, {"im": {"thread": "oc_repo"}})
 
             with self.assertRaisesRegex(config.ConfigError, "im.thread"):
+                config.load(cwd)
+
+    def test_repository_rejects_old_flat_fields_and_raw_command_plan(self):
+        cases = [
+            ({"chat_id": "oc_repo"}, "chat_id"),
+            ({"backend": "opencode"}, "backend"),
+            ({"command": "opencode"}, "command"),
+            ({"args": ["acp"]}, "args"),
+            ({"app_id": "cli_repo"}, "app_id"),
+            ({"app_secret": "secret"}, "app_secret"),
+            ({"providers": {}}, "providers"),
+        ]
+        for repo_config, field in cases:
+            with self.subTest(field=field):
+                with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+                    self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+                    self.write_repo_config(cwd, repo_config)
+
+                    with self.assertRaisesRegex(config.ConfigError, field):
+                        config.load(cwd)
+
+    def test_repository_rejects_grouped_raw_command_plan(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_repo_config(cwd, {"agent": {"command": "opencode"}})
+
+            with self.assertRaisesRegex(config.ConfigError, "agent.command"):
+                config.load(cwd)
+
+    def test_user_config_rejects_unknown_root_and_flat_default_fields(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config({"im": {"chat_id": "oc_user"}})
+            data["chat_id"] = "oc_root"
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "chat_id"):
+                config.load(cwd)
+
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"chat_id": "oc_user"}))
+
+            with self.assertRaisesRegex(config.ConfigError, "defaults.*chat_id"):
                 config.load(cwd)
 
     def test_same_layer_grouped_and_flat_conflict_fails(self):

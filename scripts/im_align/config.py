@@ -59,18 +59,30 @@ GROUPED_SECTION_KEYS = {
     },
 }
 
+USER_ALLOWED_KEYS = {
+    "providers",
+    "defaults",
+}
+
+USER_DEFAULT_ALLOWED_SECTIONS = {
+    "im": GROUPED_SECTION_KEYS["im"],
+    "agent": GROUPED_SECTION_KEYS["agent"],
+    "timeouts": GROUPED_SECTION_KEYS["timeouts"],
+    "approval": GROUPED_SECTION_KEYS["approval"],
+}
+
+REPO_GROUPED_SECTION_KEYS = {
+    "im": GROUPED_SECTION_KEYS["im"],
+    "agent": {
+        "backend": "backend",
+        "model": "model",
+        "skill": "skill",
+    },
+    "timeouts": GROUPED_SECTION_KEYS["timeouts"],
+    "approval": GROUPED_SECTION_KEYS["approval"],
+}
+
 REPO_ALLOWED_KEYS = {
-    "chat_id",
-    "backend",
-    "model",
-    "skill",
-    "command",
-    "args",
-    "debounce_seconds",
-    "approval_timeout_seconds",
-    "turn_timeout_seconds",
-    "idle_timeout_seconds",
-    "permission",
     "initiator",
     "im",
     "agent",
@@ -138,7 +150,7 @@ def _read_providers(value):
             raise ConfigError("provider keys must be non-empty strings")
         if not isinstance(provider, dict):
             raise ConfigError(f"providers.{key} must be a mapping")
-        bad = set(provider) - {"type", "app_id", "app_secret"}
+        bad = set(provider) - {"type", "app_id", "app_secret", "default_chat_id"}
         if bad:
             bad_keys = ", ".join(f"providers.{key}.{name}" for name in sorted(bad))
             raise ConfigError(f"user config contains unsupported provider keys: {bad_keys}")
@@ -151,15 +163,21 @@ def _read_providers(value):
             raise ConfigError(f"providers.{key}.app_id must be a non-empty string")
         if not isinstance(app_secret, str) or not app_secret:
             raise ConfigError(f"providers.{key}.app_secret must be a non-empty string")
+        default_chat_id = provider.get("default_chat_id", "")
+        if default_chat_id is not None and not isinstance(default_chat_id, str):
+            raise ConfigError(f"providers.{key}.default_chat_id must be a string")
         normalized[key] = {
             "type": provider_type,
             "app_id": app_id,
             "app_secret": app_secret,
+            "default_chat_id": default_chat_id or "",
         }
     return normalized
 
 
 def _resolve_provider_key(configured_key, providers):
+    if configured_key is not None and not isinstance(configured_key, str):
+        raise ConfigError("im.provider must be a string")
     if configured_key:
         if configured_key not in providers:
             raise ConfigError(f"configured IM provider {configured_key!r} does not exist in user config providers")
@@ -171,16 +189,21 @@ def _resolve_provider_key(configured_key, providers):
     raise ConfigError(f"missing Feishu/Lark credentials; run `bridge.py setup` first to write {user_config_path()}")
 
 
-def _normalize_grouped_layer(data, source):
+def _normalize_grouped_layer(data, source, grouped_sections, legacy_flat_keys=(), allow_initiator=False):
     """Accept grouped config while reusing the existing flat validation keys."""
     normalized = {}
+    legacy_flat_keys = set(legacy_flat_keys)
     for key, value in data.items():
         if key == "initiator":
+            if not allow_initiator:
+                raise ConfigError(f"{source} contains unsupported key: initiator")
             if value is not None and not isinstance(value, dict):
                 raise ConfigError(f"{source}.initiator must be a mapping")
             normalized[key] = value
             continue
-        if key not in GROUPED_SECTION_KEYS:
+        if key not in grouped_sections:
+            if key not in legacy_flat_keys:
+                raise ConfigError(f"{source} contains unsupported key: {key}")
             if key in normalized:
                 raise ConfigError(
                     f"{source} defines {key!r} more than once; use either the grouped field or the legacy flat field"
@@ -191,7 +214,7 @@ def _normalize_grouped_layer(data, source):
             continue
         if not isinstance(value, dict):
             raise ConfigError(f"{source}.{key} must be a mapping")
-        allowed = GROUPED_SECTION_KEYS[key]
+        allowed = grouped_sections[key]
         bad = set(value) - set(allowed)
         if bad:
             bad_keys = ", ".join(f"{key}.{name}" for name in sorted(bad))
@@ -251,6 +274,10 @@ def load(cwd, cli_overrides=None):
     user = _read_yaml(user_config_path())
     repo = _read_yaml(repo_config_path(cwd))
 
+    bad_user = set(user) - USER_ALLOWED_KEYS
+    if bad_user:
+        raise ConfigError(f"user config contains unsupported keys: {', '.join(sorted(bad_user))}")
+
     bad = set(repo) - REPO_ALLOWED_KEYS
     if bad:
         raise ConfigError(
@@ -259,9 +286,14 @@ def load(cwd, cli_overrides=None):
         )
 
     defaults = _read_section(user.get("defaults"))
-    defaults = _normalize_grouped_layer(defaults, "defaults")
-    repo = _normalize_grouped_layer(repo, "repository-level .im-align.yaml")
-    cli_overrides = _normalize_grouped_layer(cli_overrides or {}, "CLI overrides")
+    defaults = _normalize_grouped_layer(defaults, "defaults", USER_DEFAULT_ALLOWED_SECTIONS)
+    repo = _normalize_grouped_layer(repo, "repository-level .im-align.yaml", REPO_GROUPED_SECTION_KEYS, allow_initiator=True)
+    cli_overrides = _normalize_grouped_layer(
+        cli_overrides or {},
+        "CLI overrides",
+        GROUPED_SECTION_KEYS,
+        legacy_flat_keys=set(DEFAULTS) - {"args", "command"} | {"command", "args"},
+    )
 
     merged = dict(DEFAULTS)
     merged.update({k: v for k, v in defaults.items() if v is not None})
@@ -273,6 +305,8 @@ def load(cwd, cli_overrides=None):
     provider = providers[provider_key]
     merged["provider"] = provider_key
     merged["provider_type"] = provider["type"]
+    if not merged.get("chat_id"):
+        merged["chat_id"] = provider["default_chat_id"]
     merged["feishu_app_id"] = provider["app_id"]
     merged["feishu_app_secret"] = provider["app_secret"]
     merged["feishu_domain"] = PROVIDER_TYPE_DOMAINS[provider["type"]]

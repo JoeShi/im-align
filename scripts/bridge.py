@@ -126,6 +126,8 @@ def cmd_setup(args):
     existing = _read_existing_setup(path)
     old_provider = (existing.get("providers") or {}).get("feishu") or {}
     old_defaults = existing.get("defaults") or {}
+    old_im_defaults = old_defaults.get("im") or {}
+    old_agent_defaults = old_defaults.get("agent") or {}
     old_type = old_provider.get("type")
     if not old_type:
         old_type = "lark" if old_provider.get("domain") == "larksuite" else "feishu"
@@ -134,16 +136,14 @@ def cmd_setup(args):
     app_id = _prompt("app_id (cli_...)", old_provider.get("app_id", ""))
     app_secret = _prompt("app_secret (leave blank to keep current value)", old_provider.get("app_secret", ""), secret=True)
     provider_type = _prompt("type feishu/lark", old_type)
-    chat_id = _prompt("default group chat_id (oc_..., optional)", old_defaults.get("chat_id", ""))
-    backend = _prompt("default Agent Backend opencode/trae-cli/kiro-cli/kimi", old_defaults.get("backend", "opencode"))
+    chat_id = _prompt("default group chat_id (oc_..., optional)", old_im_defaults.get("chat_id", old_defaults.get("chat_id", "")))
+    backend = _prompt("default Agent Backend opencode/trae-cli/kiro-cli/kimi", old_agent_defaults.get("backend", old_defaults.get("backend", "opencode")))
     domain = cfgmod.PROVIDER_TYPE_DOMAINS.get(provider_type, "")
 
-    data = dict(existing)
-    providers = dict(data.get("providers") or {})
+    providers = dict(existing.get("providers") or {})
     providers["feishu"] = {"type": provider_type, "app_id": app_id, "app_secret": app_secret}
-    defaults = dict(data.get("defaults") or {})
-    defaults.update({"provider": "feishu", "chat_id": chat_id, "backend": backend})
-    data.update({"providers": providers, "defaults": defaults})
+    defaults = {"im": {"provider": "feishu", "chat_id": chat_id}, "agent": {"backend": backend}}
+    data = {"providers": providers, "defaults": defaults}
 
     # Fully validate the candidate before atomic replacement; invalid input must not corrupt existing config.
     candidate = dict(cfgmod.DEFAULTS)
@@ -152,6 +152,7 @@ def cmd_setup(args):
         {
             "provider": "feishu",
             "chat_id": chat_id or "oc_setup_validation",
+            "backend": backend,
             "provider_type": provider_type,
             "feishu_app_id": app_id,
             "feishu_app_secret": app_secret,
