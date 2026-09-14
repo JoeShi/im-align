@@ -127,25 +127,36 @@ def cmd_setup(args):
     if path.exists():
         os.chmod(path, 0o600)
     existing = _read_existing_setup(path)
-    old_provider = (existing.get("providers") or {}).get("feishu") or {}
+    existing_providers = existing.get("providers") or {}
     old_defaults = existing.get("defaults") or {}
     old_im_defaults = old_defaults.get("im") or {}
     old_agent_defaults = old_defaults.get("agent") or {}
+    default_provider_key = old_im_defaults.get("provider")
+    if not default_provider_key and len(existing_providers) == 1:
+        default_provider_key = next(iter(existing_providers))
+    provider_key = _prompt("provider key", default_provider_key or "feishu")
+    old_provider = existing_providers.get(provider_key) or {}
     old_type = old_provider.get("type")
     if not old_type:
         old_type = "lark" if old_provider.get("domain") == "larksuite" else "feishu"
+    old_chat_id = old_im_defaults.get("chat_id", old_defaults.get("chat_id", old_provider.get("default_chat_id", "")))
 
     print("Feishu/Lark custom app configuration; see references/feishu-setup.md")
     app_id = _prompt("app_id (cli_...)", old_provider.get("app_id", ""))
     app_secret = _prompt("app_secret (leave blank to keep current value)", old_provider.get("app_secret", ""), secret=True)
     provider_type = _prompt("type feishu/lark", old_type)
-    chat_id = _prompt("default group chat_id (oc_..., optional)", old_im_defaults.get("chat_id", old_defaults.get("chat_id", "")))
+    chat_id = _prompt("default group chat_id (oc_..., optional)", old_chat_id)
     backend = _prompt("default Agent Backend opencode/trae-cli/kiro-cli/kimi", old_agent_defaults.get("backend", old_defaults.get("backend", "opencode")))
     domain = cfgmod.PROVIDER_TYPE_DOMAINS.get(provider_type, "")
 
-    providers = dict(existing.get("providers") or {})
-    providers["feishu"] = {"type": provider_type, "app_id": app_id, "app_secret": app_secret}
-    defaults = {"im": {"provider": "feishu", "chat_id": chat_id}, "agent": {"backend": backend}}
+    providers = dict(existing_providers)
+    providers[provider_key] = {
+        "type": provider_type,
+        "app_id": app_id,
+        "app_secret": app_secret,
+        "default_chat_id": chat_id,
+    }
+    defaults = {"im": {"provider": provider_key, "chat_id": chat_id}, "agent": {"backend": backend}}
     data = {"providers": providers, "defaults": defaults}
     commands = existing.get("commands") or {}
     if commands:
@@ -157,7 +168,7 @@ def cmd_setup(args):
     candidate.update(defaults)
     candidate.update(
         {
-            "provider": "feishu",
+            "provider": provider_key,
             "chat_id": chat_id or "oc_setup_validation",
             "backend": backend,
             "provider_type": provider_type,

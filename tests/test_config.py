@@ -11,6 +11,7 @@ import yaml
 
 from scripts import bridge
 from scripts.im_align import config
+from scripts.im_align.im_providers.feishu import FeishuProvider
 
 
 @contextmanager
@@ -265,7 +266,7 @@ class ConfigLoadTests(unittest.TestCase):
             )
 
             with (
-                mock.patch("builtins.input", side_effect=["", "", "", "", ""]),
+                mock.patch("builtins.input", side_effect=["", "", "", "", "", ""]),
                 mock.patch("getpass.getpass", return_value=""),
                 redirect_stdout(io.StringIO()),
             ):
@@ -286,6 +287,7 @@ class ConfigLoadTests(unittest.TestCase):
                     "type": "lark",
                     "app_id": "cli_old",
                     "app_secret": "old_secret",
+                    "default_chat_id": "oc_old",
                 },
             )
             self.assertEqual(
@@ -296,6 +298,34 @@ class ConfigLoadTests(unittest.TestCase):
                         "command": "opencode",
                         "args": ["acp"],
                     }
+                },
+            )
+
+    def test_setup_can_create_custom_provider_key(self):
+        with isolated_config_home():
+            with (
+                mock.patch("builtins.input", side_effect=["work", "cli_work", "feishu", "oc_work", "opencode", ""]),
+                mock.patch("getpass.getpass", return_value="secret"),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(bridge.cmd_setup(SimpleNamespace()), 0)
+
+            written = yaml.safe_load(Path(config.user_config_path()).read_text(encoding="utf-8"))
+            self.assertEqual(
+                written,
+                {
+                    "providers": {
+                        "work": {
+                            "type": "feishu",
+                            "app_id": "cli_work",
+                            "app_secret": "secret",
+                        "default_chat_id": "oc_work",
+                        }
+                    },
+                    "defaults": {
+                        "im": {"provider": "work", "chat_id": "oc_work"},
+                        "agent": {"backend": "opencode"},
+                    },
                 },
             )
 
@@ -351,6 +381,40 @@ class ConfigLoadTests(unittest.TestCase):
 
             with self.assertRaisesRegex(config.ConfigError, "providers.feishu.domain"):
                 config.load(cwd)
+
+    def test_provider_construction_smoke_for_feishu_and_lark(self):
+        cases = [
+            ("work", "feishu", "feishu"),
+            ("intl", "lark", "larksuite"),
+        ]
+        for key, provider_type, expected_domain_key in cases:
+            with self.subTest(provider_type=provider_type):
+                with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+                    self.write_user_config(
+                        {
+                            "providers": {
+                                key: {
+                                    "type": provider_type,
+                                    "app_id": f"cli_{provider_type}",
+                                    "app_secret": "secret",
+                                    "default_chat_id": "oc_provider",
+                                }
+                            },
+                            "defaults": {},
+                        }
+                    )
+
+                    loaded = config.load(cwd)
+                    provider = FeishuProvider(
+                        loaded["feishu_app_id"],
+                        loaded["feishu_app_secret"],
+                        loaded["feishu_domain"],
+                    )
+
+                    self.assertEqual(loaded["im"]["type"], provider_type)
+                    self.assertEqual(loaded["feishu_domain"], expected_domain_key)
+                    self.assertEqual(provider._app_id, f"cli_{provider_type}")
+                    self.assertIn(provider_type, config.PROVIDER_CALLBACK_APPROVAL_TYPES)
 
     def test_provider_type_and_credentials_are_required(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
