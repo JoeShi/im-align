@@ -44,14 +44,17 @@ class ConfigLoadTests(unittest.TestCase):
     def write_repo_config(self, cwd, data):
         write_yaml(Path(cwd) / ".im-align.yaml", data)
 
-    def user_config(self, defaults=None):
+    def user_config(self, defaults=None, default_chat_id="oc_user"):
+        provider = {
+            "type": "feishu",
+            "app_id": "cli_test",
+            "app_secret": "secret",
+        }
+        if default_chat_id is not None:
+            provider["default_chat_id"] = default_chat_id
         return {
             "providers": {
-                "feishu": {
-                    "type": "feishu",
-                    "app_id": "cli_test",
-                    "app_secret": "secret",
-                }
+                "feishu": provider,
             },
             "defaults": defaults or {},
         }
@@ -61,7 +64,6 @@ class ConfigLoadTests(unittest.TestCase):
             self.write_user_config(
                 self.user_config(
                     {
-                        "im": {"chat_id": "oc_user"},
                         "agent": {"backend": "opencode", "skill": "user-skill"},
                         "timeouts": {
                             "debounce_seconds": 7,
@@ -137,9 +139,10 @@ class ConfigLoadTests(unittest.TestCase):
                             "type": "lark",
                             "app_id": "cli_lark",
                             "app_secret": "secret",
+                            "default_chat_id": "oc_lark",
                         }
                     },
-                    "defaults": {"im": {"provider": "intl", "chat_id": "oc_lark"}},
+                    "defaults": {"im": {"provider": "intl"}},
                 }
             )
 
@@ -181,7 +184,7 @@ class ConfigLoadTests(unittest.TestCase):
                             "default_chat_id": "oc_provider",
                         }
                     },
-                    "defaults": {"im": {"chat_id": "oc_user"}},
+                    "defaults": {},
                 }
             )
             self.write_repo_config(cwd, {"im": {"chat_id": "oc_repo"}})
@@ -190,7 +193,7 @@ class ConfigLoadTests(unittest.TestCase):
 
             self.assertEqual(loaded["im"]["chat_id"], "oc_cli")
 
-    def test_repository_chat_overrides_user_and_provider_chat(self):
+    def test_repository_chat_overrides_provider_chat(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             self.write_user_config(
                 {
@@ -202,7 +205,7 @@ class ConfigLoadTests(unittest.TestCase):
                             "default_chat_id": "oc_provider",
                         }
                     },
-                    "defaults": {"im": {"chat_id": "oc_user"}},
+                    "defaults": {},
                 }
             )
             self.write_repo_config(cwd, {"im": {"chat_id": "oc_repo"}})
@@ -213,17 +216,19 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_cli_provider_override_selects_named_provider(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            data = self.user_config({"im": {"provider": "work", "chat_id": "oc_user"}})
+            data = self.user_config({"im": {"provider": "work"}})
             data["providers"] = {
                 "work": {
                     "type": "feishu",
                     "app_id": "cli_work",
                     "app_secret": "secret",
+                    "default_chat_id": "oc_work",
                 },
                 "intl": {
                     "type": "lark",
                     "app_id": "cli_intl",
                     "app_secret": "secret",
+                    "default_chat_id": "oc_intl",
                 },
             }
             self.write_user_config(data)
@@ -277,7 +282,7 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertEqual(
                 written["defaults"],
                 {
-                    "im": {"provider": "feishu", "chat_id": "oc_old"},
+                    "im": {"provider": "feishu"},
                     "agent": {"backend": "opencode"},
                 },
             )
@@ -287,7 +292,7 @@ class ConfigLoadTests(unittest.TestCase):
                     "type": "lark",
                     "app_id": "cli_old",
                     "app_secret": "old_secret",
-                    "default_chat_id": "oc_old",
+                    "default_chat_id": "",
                 },
             )
             self.assertEqual(
@@ -319,11 +324,11 @@ class ConfigLoadTests(unittest.TestCase):
                             "type": "feishu",
                             "app_id": "cli_work",
                             "app_secret": "secret",
-                        "default_chat_id": "oc_work",
+                            "default_chat_id": "oc_work",
                         }
                     },
                     "defaults": {
-                        "im": {"provider": "work", "chat_id": "oc_work"},
+                        "im": {"provider": "work"},
                         "agent": {"backend": "opencode"},
                     },
                 },
@@ -331,17 +336,19 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_repository_provider_selection_overrides_user_default(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            data = self.user_config({"im": {"provider": "work", "chat_id": "oc_user"}})
+            data = self.user_config({"im": {"provider": "work"}})
             data["providers"] = {
                 "work": {
                     "type": "feishu",
                     "app_id": "cli_work",
                     "app_secret": "secret",
+                    "default_chat_id": "oc_work",
                 },
                 "intl": {
                     "type": "lark",
                     "app_id": "cli_intl",
                     "app_secret": "secret",
+                    "default_chat_id": "oc_intl",
                 },
             }
             self.write_user_config(data)
@@ -355,11 +362,12 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_multiple_providers_require_explicit_selection(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            data = self.user_config({"im": {"chat_id": "oc_user"}})
+            data = self.user_config()
             data["providers"]["intl"] = {
                 "type": "lark",
                 "app_id": "cli_intl",
                 "app_secret": "secret",
+                "default_chat_id": "oc_intl",
             }
             self.write_user_config(data)
 
@@ -368,14 +376,14 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_unknown_provider_selection_fails(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"provider": "missing", "chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config({"im": {"provider": "missing"}}))
 
             with self.assertRaisesRegex(config.ConfigError, "does not exist"):
                 config.load(cwd)
 
     def test_provider_domain_is_not_user_facing_schema(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            data = self.user_config({"im": {"chat_id": "oc_user"}})
+            data = self.user_config()
             data["providers"]["feishu"]["domain"] = "feishu"
             self.write_user_config(data)
 
@@ -427,7 +435,7 @@ class ConfigLoadTests(unittest.TestCase):
                             "app_secret": "secret",
                         }
                     },
-                    "defaults": {"im": {"chat_id": "oc_user"}},
+                    "defaults": {},
                 }
             )
 
@@ -444,7 +452,7 @@ class ConfigLoadTests(unittest.TestCase):
                             "app_id": "cli_work",
                         }
                     },
-                    "defaults": {"im": {"chat_id": "oc_user"}},
+                    "defaults": {},
                 }
             )
 
@@ -453,14 +461,14 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_missing_chat_id_fails_after_all_fallbacks(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config())
+            self.write_user_config(self.user_config(default_chat_id=None))
 
             with self.assertRaisesRegex(config.ConfigError, "chat_id"):
                 config.load(cwd)
 
     def test_repository_callback_approval_is_allowed(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config())
             self.write_repo_config(cwd, {"approval": {"mode": "callback"}})
 
             loaded = config.load(cwd)
@@ -469,7 +477,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_repository_auto_allow_approval_is_rejected(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config())
             self.write_repo_config(cwd, {"approval": {"mode": "auto_allow"}})
 
             with self.assertRaisesRegex(config.ConfigError, "approval.mode.*auto_allow"):
@@ -480,7 +488,6 @@ class ConfigLoadTests(unittest.TestCase):
             self.write_user_config(
                 self.user_config(
                     {
-                        "im": {"chat_id": "oc_user"},
                         "approval": {"mode": "auto_allow"},
                     }
                 )
@@ -492,7 +499,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_cli_auto_allow_requires_acknowledgement(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config())
 
             with self.assertRaisesRegex(config.ConfigError, "acknowledge-auto-allow"):
                 config.load(cwd, {"approval": {"mode": "auto_allow"}})
@@ -514,7 +521,6 @@ class ConfigLoadTests(unittest.TestCase):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config(
                 {
-                    "im": {"chat_id": "oc_user"},
                     "agent": {"backend": "opencode", "command_alias": "safe-opencode"},
                 }
             )
@@ -537,7 +543,6 @@ class ConfigLoadTests(unittest.TestCase):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config(
                 {
-                    "im": {"chat_id": "oc_user"},
                     "agent": {"backend": "opencode", "command_alias": "wrapper"},
                 }
             )
@@ -556,7 +561,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_repository_can_select_command_alias(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            data = self.user_config({"im": {"chat_id": "oc_user"}, "agent": {"backend": "opencode"}})
+            data = self.user_config({"agent": {"backend": "opencode"}})
             data["commands"] = {
                 "safe-opencode": {
                     "backend": "opencode",
@@ -576,7 +581,6 @@ class ConfigLoadTests(unittest.TestCase):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config(
                 {
-                    "im": {"chat_id": "oc_user"},
                     "agent": {"backend": "opencode", "command_alias": "user-alias"},
                 }
             )
@@ -605,10 +609,80 @@ class ConfigLoadTests(unittest.TestCase):
 
         self.assertEqual(bridge._overrides(args)["command_alias"], "safe-opencode")
 
+    def test_start_parser_forwards_empty_command_alias_override(self):
+        args = bridge.build_parser().parse_args(["start", "topic", "--command-alias", ""])
+
+        self.assertEqual(bridge._overrides(args)["command_alias"], "")
+
+    def test_worker_reload_preserves_empty_command_alias_override(self):
+        record = {
+            "skill": "grill-with-docs",
+            "provider": "feishu",
+            "chat_id": "oc_test",
+            "backend": "kiro-cli",
+            "model": "",
+            "command_alias": "",
+            "permission": "auto_allow",
+        }
+
+        overrides = bridge._record_overrides(record)
+
+        self.assertEqual(overrides["command_alias"], "")
+        self.assertTrue(overrides["acknowledge_auto_allow"])
+
+    def test_prepare_record_saves_resolved_command_alias(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config(
+                {
+                    "agent": {"backend": "opencode", "command_alias": "safe-opencode"},
+                }
+            )
+            data["commands"] = {
+                "safe-opencode": {
+                    "backend": "opencode",
+                    "command": "opencode",
+                    "args": ["acp"],
+                }
+            }
+            self.write_user_config(data)
+            self.write_repo_config(cwd, {"im": {"chat_id": "oc_repo"}})
+            args = SimpleNamespace(
+                topic="topic",
+                skill=None,
+                provider=None,
+                chat=None,
+                backend="kiro-cli",
+                model=None,
+                command_alias="",
+                approval="auto_allow",
+                acknowledge_auto_allow=True,
+                initiator="ou_test",
+            )
+            old_cwd = os.getcwd()
+            os.chdir(cwd)
+            try:
+                with mock.patch.object(bridge.identity, "ensure_git_repo"), mock.patch(
+                    "shutil.which", return_value="/usr/bin/kiro-cli"
+                ), mock.patch.object(
+                    bridge.identity,
+                    "resolve_claim",
+                    return_value={"open_id": "ou_test", "email": "", "name": "Tester"},
+                ):
+                    record = bridge._prepare_record(args)
+            finally:
+                os.chdir(old_cwd)
+
+        self.assertEqual(record["backend"], "kiro-cli")
+        self.assertEqual(record["command_alias"], "")
+        self.assertEqual(
+            record["agent_argv"],
+            ["kiro-cli", "acp", "--agent-engine", "v3", "--auth-method", "cli"],
+        )
+
     def test_missing_command_alias_fails(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             self.write_user_config(
-                self.user_config({"im": {"chat_id": "oc_user"}, "agent": {"command_alias": "missing"}})
+                self.user_config({"agent": {"command_alias": "missing"}})
             )
 
             with self.assertRaisesRegex(config.ConfigError, "command alias.*does not exist"):
@@ -618,7 +692,6 @@ class ConfigLoadTests(unittest.TestCase):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config(
                 {
-                    "im": {"chat_id": "oc_user"},
                     "agent": {"backend": "opencode", "command_alias": "kiro"},
                 }
             )
@@ -632,7 +705,6 @@ class ConfigLoadTests(unittest.TestCase):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config(
                 {
-                    "im": {"chat_id": "oc_user"},
                     "agent": {"backend": "opencode", "command_alias": "danger"},
                 }
             )
@@ -650,7 +722,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_grouped_section_must_be_mapping(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config())
             self.write_repo_config(cwd, {"timeouts": "soon"})
 
             with self.assertRaisesRegex(config.ConfigError, "timeouts must be a mapping"):
@@ -658,7 +730,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_unknown_grouped_key_fails_fast(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config())
             self.write_repo_config(cwd, {"im": {"thread": "oc_repo"}})
 
             with self.assertRaisesRegex(config.ConfigError, "im.thread"):
@@ -678,7 +750,7 @@ class ConfigLoadTests(unittest.TestCase):
         for repo_config, field in cases:
             with self.subTest(field=field):
                 with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-                    self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+                    self.write_user_config(self.user_config())
                     self.write_repo_config(cwd, repo_config)
 
                     with self.assertRaisesRegex(config.ConfigError, field):
@@ -686,7 +758,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_repository_rejects_grouped_raw_command_plan(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_user_config(self.user_config())
             self.write_repo_config(cwd, {"agent": {"command": "opencode"}})
 
             with self.assertRaisesRegex(config.ConfigError, "agent.command"):
@@ -694,7 +766,7 @@ class ConfigLoadTests(unittest.TestCase):
 
     def test_user_config_rejects_unknown_root_and_flat_default_fields(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            data = self.user_config({"im": {"chat_id": "oc_user"}})
+            data = self.user_config()
             data["chat_id"] = "oc_root"
             self.write_user_config(data)
 
@@ -707,23 +779,16 @@ class ConfigLoadTests(unittest.TestCase):
             with self.assertRaisesRegex(config.ConfigError, "defaults.*chat_id"):
                 config.load(cwd)
 
-    def test_same_layer_grouped_and_flat_conflict_fails(self):
+    def test_user_defaults_rejects_grouped_chat_id(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(
-                self.user_config(
-                    {
-                        "chat_id": "oc_flat",
-                        "im": {"chat_id": "oc_grouped"},
-                    }
-                )
-            )
+            self.write_user_config(self.user_config({"im": {"chat_id": "oc_grouped"}}))
 
-            with self.assertRaisesRegex(config.ConfigError, "chat_id"):
+            with self.assertRaisesRegex(config.ConfigError, "im.chat_id"):
                 config.load(cwd)
 
     def test_user_config_mode_is_enforced_before_loading(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}), mode=0o644)
+            self.write_user_config(self.user_config(), mode=0o644)
 
             with self.assertRaisesRegex(config.ConfigError, "must have mode 0600"):
                 config.load(cwd)

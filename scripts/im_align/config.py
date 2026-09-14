@@ -70,7 +70,9 @@ USER_ALLOWED_KEYS = {
 }
 
 USER_DEFAULT_ALLOWED_SECTIONS = {
-    "im": GROUPED_SECTION_KEYS["im"],
+    "im": {
+        "provider": "provider",
+    },
     "agent": GROUPED_SECTION_KEYS["agent"],
     "timeouts": GROUPED_SECTION_KEYS["timeouts"],
     "approval": GROUPED_SECTION_KEYS["approval"],
@@ -388,7 +390,9 @@ def validate(cfg):
     if cfg["feishu_domain"] not in ("feishu", "larksuite"):
         raise ConfigError("providers.feishu.domain must be feishu or larksuite")
     if not isinstance(cfg["chat_id"], str) or not cfg["chat_id"]:
-        raise ConfigError("default group chat_id is not configured; use defaults.chat_id or --chat")
+        raise ConfigError(
+            "default group chat_id is not configured; use providers.<key>.default_chat_id, repository im.chat_id, or --chat"
+        )
     if cfg["backend"] not in (BACKEND_OPENCODE, BACKEND_TRAE_CLI, BACKEND_KIRO_CLI, BACKEND_KIMI):
         raise ConfigError(f"unsupported agent.backend: {cfg['backend']}")
     if not isinstance(cfg["skill"], str) or not cfg["skill"].strip():

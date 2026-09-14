@@ -13,6 +13,17 @@ The grouped configuration redesign was verified through automated unit and smoke
 - Provider construction smoke tests instantiated Feishu and Lark providers from resolved grouped config without starting long connections or sending group messages.
 - Verification commands passed: `uv sync --frozen`, `uv run --frozen python -m unittest tests.test_config`, Python compile checks, `uv run --frozen python scripts/bridge.py --help`, and `git diff --check`.
 
+## kiro-cli Auto-Allow Real-Machine Verification (2026-09-14)
+
+Run `run-1789395548-1b05ca` used kiro-cli 2.21.4 v3 engine against the `im-align-dev` Feishu/Lark test group, with `permission: auto_allow` selected through CLI flags for this run only:
+
+- `start --foreground --backend kiro-cli --command-alias "" --approval auto_allow --acknowledge-auto-allow` created root message `om_x100b65b46b3308a4b20ac534d9b85d2` and ACP session `sess_d7b48e15-39a3-423f-b3c8-f8292482caec`.
+- The Bridge reached final state `done`, cleared PID, and recorded `spec_path=docs/smoke/kiro-cli-autoallow-e2e-2026-09-14.md`; completion validation passed after kiro wrote the file in the launch cwd and emitted the strict marker.
+- No manual Approval card was required during the successful auto_allow run. A preceding callback-mode probe reached real Approval-card delivery and callback handling, then was stopped to avoid repeated Bash approvals from the Agent's environment checks.
+- A stale user-level default command alias (`safe-opencode`) exposed that `_execute_record` must preserve the start-time `command_alias` override when the worker reloads config. The run used the patched record field so `--command-alias ""` selected the built-in kiro argv instead of the opencode alias.
+- Follow-up probes confirmed background worker startup is healthy after preserving the alias override: a minimal background ACP harness initialized kiro, a Feishu+ACP background harness initialized kiro, and background run `run-1789396168-7bae08` reached `active` with ACP session `sess_33afb87e-28f2-4012-9702-0ba558e9b51c` before being stopped.
+- No branch, commit, or push was created. The temporary smoke Spec was removed after recording the evidence.
+
 ## Real-Machine Verification Record (2026-09-12)
 
 Using the `im-align-dev` Feishu/Lark test group and opencode 1.18.30, the Skill-native path completed a smoke run:

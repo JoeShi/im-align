@@ -16,7 +16,6 @@ providers:
 defaults:
   im:
     provider: work
-    chat_id: oc_xxx
   agent:
     backend: opencode # or trae-cli / kiro-cli / kimi
     skill: grill-with-docs
@@ -74,7 +73,7 @@ Repository config is strict: old flat fields, `providers`, `app_id`, `app_secret
 ## Resolution Rules
 
 - Provider selection: CLI `--provider`, then repository `im.provider`, then user `defaults.im.provider`, then single-provider auto-selection.
-- Chat selection: CLI `--chat`, then repository `im.chat_id`, then user `defaults.im.chat_id`, then selected provider `default_chat_id`.
+- Chat selection: CLI `--chat`, then repository `im.chat_id`, then selected provider `default_chat_id`.
 - Agent Backend selection: CLI `--backend`, then repository `agent.backend`, then user `defaults.agent.backend`, then the built-in default.
 - Command alias selection: CLI `--command-alias`, then repository `agent.command_alias`, then user `defaults.agent.command_alias`; if empty, built-in backend argv is used.
 - Approval selection: CLI `--approval`, then repository `approval.mode`, then user `defaults.approval.mode`, then `callback`.

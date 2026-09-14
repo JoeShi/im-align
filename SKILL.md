@@ -12,7 +12,7 @@ Use the Python Bridge bundled with this Skill to start an independent Agent Back
 - The current working directory must be the git worktree the user wants to align. Do not accept remote URLs, clone repositories, or switch to another repository.
 - Feishu/Lark App Secret may be written only to user-level `~/.config/im-align/config.yaml`. It must not appear in replies, command arguments, repository files, or log excerpts.
 - The default permission policy is `callback`. Do not proactively recommend `auto_allow`; do not bypass Feishu/Lark Approval cards unless the user explicitly chooses it.
-- Repository `.im-align.yaml` may select `im.provider`, `im.chat_id`, and `agent.command_alias`, but provider credentials and real executable commands live only in user-level config.
+- Repository `.im-align.yaml` may select non-secret grouped fields such as `im.provider`, `im.chat_id`, `agent.backend`, `agent.skill`, `agent.model`, `agent.command_alias`, `timeouts`, and `approval.mode: callback`; provider credentials and real executable commands live only in user-level config.
 - Run at most one Alignment on a machine at a time. If a run already exists, use `status` or `wait`; do not start a second Bridge.
 - After Alignment completes, report only the Spec and continuation commands. Do not start coding.
 

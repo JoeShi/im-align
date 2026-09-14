@@ -139,7 +139,7 @@ def cmd_setup(args):
     old_type = old_provider.get("type")
     if not old_type:
         old_type = "lark" if old_provider.get("domain") == "larksuite" else "feishu"
-    old_chat_id = old_im_defaults.get("chat_id", old_defaults.get("chat_id", old_provider.get("default_chat_id", "")))
+    old_chat_id = old_provider.get("default_chat_id", "")
 
     print("Feishu/Lark custom app configuration; see references/feishu-setup.md")
     app_id = _prompt("app_id (cli_...)", old_provider.get("app_id", ""))
@@ -156,7 +156,7 @@ def cmd_setup(args):
         "app_secret": app_secret,
         "default_chat_id": chat_id,
     }
-    defaults = {"im": {"provider": provider_key, "chat_id": chat_id}, "agent": {"backend": backend}}
+    defaults = {"im": {"provider": provider_key}, "agent": {"backend": backend}}
     data = {"providers": providers, "defaults": defaults}
     commands = existing.get("commands") or {}
     if commands:
@@ -238,6 +238,19 @@ def _overrides(args):
     }
 
 
+def _record_overrides(record):
+    return {
+        "skill": record["skill"],
+        "provider": record.get("provider", ""),
+        "chat_id": record["chat_id"],
+        "backend": record["backend"],
+        "model": record.get("model", ""),
+        "command_alias": record.get("command_alias", ""),
+        "permission": record["permission"],
+        "acknowledge_auto_allow": record["permission"] == cfgmod.POLICY_AUTO_ALLOW,
+    }
+
+
 def _prepare_record(args):
     cwd = os.path.abspath(os.getcwd())
     identity.ensure_git_repo(cwd)
@@ -278,6 +291,7 @@ def _prepare_record(args):
         "chat_id": config["im"]["chat_id"],
         "backend": agent["backend"],
         "model": agent.get("model", ""),
+        "command_alias": agent.get("command_alias", ""),
         "agent_argv": argv,
         "permission": config["approval"]["mode"],
         "cwd": cwd,
@@ -589,18 +603,7 @@ def _execute_record(run_id, resume=None):
         try:
             record["pid"] = os.getpid()
             state.save_active(record)
-            config = cfgmod.load(
-                record["cwd"],
-                {
-                    "skill": record["skill"],
-                    "provider": record.get("provider", ""),
-                    "chat_id": record["chat_id"],
-                    "backend": record["backend"],
-                    "model": record.get("model", ""),
-                    "permission": record["permission"],
-                    "acknowledge_auto_allow": record["permission"] == cfgmod.POLICY_AUTO_ALLOW,
-                },
-            )
+            config = cfgmod.load(record["cwd"], _record_overrides(record))
             provider = FeishuProvider(
                 config["feishu_app_id"],
                 config["feishu_app_secret"],
