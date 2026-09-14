@@ -94,6 +94,7 @@ class ConfigLoadTests(unittest.TestCase):
                     "backend": "opencode",
                     "model": "repo-model",
                     "skill": "cli-skill",
+                    "command_alias": "",
                     "command": "",
                     "args": [],
                 },
@@ -252,6 +253,13 @@ class ConfigLoadTests(unittest.TestCase):
                         "chat_id": "oc_old",
                         "backend": "opencode",
                     },
+                    "commands": {
+                        "safe-opencode": {
+                            "backend": "opencode",
+                            "command": "opencode",
+                            "args": ["acp"],
+                        }
+                    },
                     "legacy": "drop",
                 }
             )
@@ -278,6 +286,16 @@ class ConfigLoadTests(unittest.TestCase):
                     "type": "lark",
                     "app_id": "cli_old",
                     "app_secret": "old_secret",
+                },
+            )
+            self.assertEqual(
+                written["commands"],
+                {
+                    "safe-opencode": {
+                        "backend": "opencode",
+                        "command": "opencode",
+                        "args": ["acp"],
+                    }
                 },
             )
 
@@ -427,6 +445,144 @@ class ConfigLoadTests(unittest.TestCase):
 
         self.assertEqual(overrides["permission"], "auto_allow")
         self.assertTrue(overrides["acknowledge_auto_allow"])
+
+    def test_command_alias_resolves_trusted_user_command_plan(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config(
+                {
+                    "im": {"chat_id": "oc_user"},
+                    "agent": {"backend": "opencode", "command_alias": "safe-opencode"},
+                }
+            )
+            data["commands"] = {
+                "safe-opencode": {
+                    "backend": "opencode",
+                    "command": "opencode",
+                    "args": ["acp"],
+                }
+            }
+            self.write_user_config(data)
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["agent"]["command_alias"], "safe-opencode")
+            self.assertEqual(loaded["agent"]["command"], "opencode")
+            self.assertEqual(loaded["agent"]["args"], ["acp"])
+
+    def test_command_alias_args_default_to_empty_list(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config(
+                {
+                    "im": {"chat_id": "oc_user"},
+                    "agent": {"backend": "opencode", "command_alias": "wrapper"},
+                }
+            )
+            data["commands"] = {
+                "wrapper": {
+                    "backend": "opencode",
+                    "command": "safe-opencode-wrapper",
+                }
+            }
+            self.write_user_config(data)
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["agent"]["command"], "safe-opencode-wrapper")
+            self.assertEqual(loaded["agent"]["args"], [])
+
+    def test_repository_can_select_command_alias(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config({"im": {"chat_id": "oc_user"}, "agent": {"backend": "opencode"}})
+            data["commands"] = {
+                "safe-opencode": {
+                    "backend": "opencode",
+                    "command": "opencode",
+                    "args": ["acp"],
+                }
+            }
+            self.write_user_config(data)
+            self.write_repo_config(cwd, {"agent": {"command_alias": "safe-opencode"}})
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["agent"]["command_alias"], "safe-opencode")
+            self.assertEqual(loaded["agent"]["command"], "opencode")
+
+    def test_cli_command_alias_override_takes_precedence(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config(
+                {
+                    "im": {"chat_id": "oc_user"},
+                    "agent": {"backend": "opencode", "command_alias": "user-alias"},
+                }
+            )
+            data["commands"] = {
+                "user-alias": {
+                    "backend": "opencode",
+                    "command": "user-opencode",
+                },
+                "cli-alias": {
+                    "backend": "opencode",
+                    "command": "cli-opencode",
+                },
+            }
+            self.write_user_config(data)
+            self.write_repo_config(cwd, {"agent": {"command_alias": "repo-alias"}})
+            data["commands"]["repo-alias"] = {"backend": "opencode", "command": "repo-opencode"}
+            self.write_user_config(data)
+
+            loaded = config.load(cwd, {"command_alias": "cli-alias"})
+
+            self.assertEqual(loaded["agent"]["command_alias"], "cli-alias")
+            self.assertEqual(loaded["agent"]["command"], "cli-opencode")
+
+    def test_start_parser_forwards_command_alias_override(self):
+        args = bridge.build_parser().parse_args(["start", "topic", "--command-alias", "safe-opencode"])
+
+        self.assertEqual(bridge._overrides(args)["command_alias"], "safe-opencode")
+
+    def test_missing_command_alias_fails(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                self.user_config({"im": {"chat_id": "oc_user"}, "agent": {"command_alias": "missing"}})
+            )
+
+            with self.assertRaisesRegex(config.ConfigError, "command alias.*does not exist"):
+                config.load(cwd)
+
+    def test_command_alias_backend_mismatch_fails(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config(
+                {
+                    "im": {"chat_id": "oc_user"},
+                    "agent": {"backend": "opencode", "command_alias": "kiro"},
+                }
+            )
+            data["commands"] = {"kiro": {"backend": "kiro-cli", "command": "kiro-cli", "args": ["acp"]}}
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "declares backend"):
+                config.load(cwd)
+
+    def test_command_alias_dangerous_argv_fails(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config(
+                {
+                    "im": {"chat_id": "oc_user"},
+                    "agent": {"backend": "opencode", "command_alias": "danger"},
+                }
+            )
+            data["commands"] = {
+                "danger": {
+                    "backend": "opencode",
+                    "command": "opencode",
+                    "args": ["--yolo"],
+                }
+            }
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "dangerous parameter"):
+                config.load(cwd)
 
     def test_grouped_section_must_be_mapping(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:

@@ -36,6 +36,7 @@ DEFAULTS = {
     "backend": BACKEND_OPENCODE,
     "model": "",
     "skill": "grill-with-docs",
+    "command_alias": "",
     "command": "",
     "args": [],
     "debounce_seconds": 5,
@@ -54,8 +55,7 @@ GROUPED_SECTION_KEYS = {
         "backend": "backend",
         "model": "model",
         "skill": "skill",
-        "command": "command",
-        "args": "args",
+        "command_alias": "command_alias",
     },
     "timeouts": {key: key for key in TIMEOUT_KEYS},
     "approval": {
@@ -66,6 +66,7 @@ GROUPED_SECTION_KEYS = {
 USER_ALLOWED_KEYS = {
     "providers",
     "defaults",
+    "commands",
 }
 
 USER_DEFAULT_ALLOWED_SECTIONS = {
@@ -81,6 +82,7 @@ REPO_GROUPED_SECTION_KEYS = {
         "backend": "backend",
         "model": "model",
         "skill": "skill",
+        "command_alias": "command_alias",
     },
     "timeouts": GROUPED_SECTION_KEYS["timeouts"],
     "approval": GROUPED_SECTION_KEYS["approval"],
@@ -179,6 +181,38 @@ def _read_providers(value):
     return normalized
 
 
+def _read_commands(value):
+    commands = _read_section(value)
+    normalized = {}
+    for alias, plan in commands.items():
+        if not isinstance(alias, str) or not alias.strip():
+            raise ConfigError("command alias keys must be non-empty strings")
+        if not isinstance(plan, dict):
+            raise ConfigError(f"commands.{alias} must be a mapping")
+        bad = set(plan) - {"backend", "command", "args"}
+        if bad:
+            bad_keys = ", ".join(f"commands.{alias}.{name}" for name in sorted(bad))
+            raise ConfigError(f"user config contains unsupported command keys: {bad_keys}")
+        backend = plan.get("backend")
+        command = plan.get("command")
+        args = plan.get("args", [])
+        if backend not in (BACKEND_OPENCODE, BACKEND_TRAE_CLI, BACKEND_KIRO_CLI, BACKEND_KIMI):
+            raise ConfigError(f"commands.{alias}.backend is not a supported Agent Backend")
+        if not isinstance(command, str) or not command:
+            raise ConfigError(f"commands.{alias}.command must be a non-empty string")
+        if args is None:
+            args = []
+        if not isinstance(args, list) or not all(isinstance(v, str) for v in args):
+            raise ConfigError(f"commands.{alias}.args must be an array of strings")
+        backend_argv(backend, command=command, args=args)
+        normalized[alias] = {
+            "backend": backend,
+            "command": command,
+            "args": list(args),
+        }
+    return normalized
+
+
 def _resolve_provider_key(configured_key, providers):
     if configured_key is not None and not isinstance(configured_key, str):
         raise ConfigError("im.provider must be a string")
@@ -191,6 +225,17 @@ def _resolve_provider_key(configured_key, providers):
     if providers:
         raise ConfigError("multiple IM providers are configured; select one with defaults.im.provider, .im-align.yaml im.provider, or --provider")
     raise ConfigError(f"missing Feishu/Lark credentials; run `bridge.py setup` first to write {user_config_path()}")
+
+
+def _resolve_command_alias(alias, backend, commands):
+    if not alias:
+        return "", []
+    if alias not in commands:
+        raise ConfigError(f"configured command alias {alias!r} does not exist in user config commands")
+    plan = commands[alias]
+    if plan["backend"] != backend:
+        raise ConfigError(f"command alias {alias!r} declares backend {plan['backend']!r}, but agent.backend resolved to {backend!r}")
+    return plan["command"], list(plan["args"])
 
 
 def _normalize_grouped_layer(data, source, grouped_sections, legacy_flat_keys=(), allow_initiator=False):
@@ -253,6 +298,7 @@ def _with_grouped_sections(cfg):
         "backend": cfg["backend"],
         "model": cfg.get("model", ""),
         "skill": cfg["skill"],
+        "command_alias": cfg.get("command_alias", ""),
         "command": cfg.get("command", ""),
         "args": list(cfg.get("args", [])),
     }
@@ -311,6 +357,7 @@ def load(cwd, cli_overrides=None):
     merged.update({k: v for k, v in cli_overrides.items() if v is not None})
 
     providers = _read_providers(user.get("providers"))
+    commands = _read_commands(user.get("commands"))
     provider_key = _resolve_provider_key(merged.get("provider", ""), providers)
     provider = providers[provider_key]
     merged["provider"] = provider_key
@@ -320,6 +367,11 @@ def load(cwd, cli_overrides=None):
     merged["feishu_app_id"] = provider["app_id"]
     merged["feishu_app_secret"] = provider["app_secret"]
     merged["feishu_domain"] = PROVIDER_TYPE_DOMAINS[provider["type"]]
+    merged["command"], merged["args"] = _resolve_command_alias(
+        merged.get("command_alias", ""),
+        merged["backend"],
+        commands,
+    )
     validate(merged)
     return _with_grouped_sections(merged)
 

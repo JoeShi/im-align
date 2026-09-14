@@ -47,6 +47,7 @@ def build_parser():
     s.add_argument("--chat", default=None, help="Feishu/Lark group chat_id (oc_...)")
     s.add_argument("--backend", default=None, choices=["opencode", "trae-cli", "kiro-cli", "kimi"])
     s.add_argument("--model", default=None, help="model identifier; omit to keep the Agent's current selection")
+    s.add_argument("--command-alias", default=None, help="configured trusted Agent Backend command alias")
     s.add_argument("--approval", default=None, choices=[cfgmod.POLICY_CALLBACK, cfgmod.POLICY_AUTO_ALLOW], help="temporary Approval mode override")
     s.add_argument("--acknowledge-auto-allow", action="store_true", help="confirm the risk of using --approval auto_allow")
     s.add_argument("--initiator", default=None, help="initiator email or open_id")
@@ -146,6 +147,10 @@ def cmd_setup(args):
     providers["feishu"] = {"type": provider_type, "app_id": app_id, "app_secret": app_secret}
     defaults = {"im": {"provider": "feishu", "chat_id": chat_id}, "agent": {"backend": backend}}
     data = {"providers": providers, "defaults": defaults}
+    commands = existing.get("commands") or {}
+    if commands:
+        cfgmod._read_commands(commands)
+        data["commands"] = commands
 
     # Fully validate the candidate before atomic replacement; invalid input must not corrupt existing config.
     candidate = dict(cfgmod.DEFAULTS)
@@ -216,6 +221,7 @@ def _overrides(args):
         "chat_id": getattr(args, "chat", None),
         "backend": getattr(args, "backend", None),
         "model": getattr(args, "model", None),
+        "command_alias": getattr(args, "command_alias", None),
         "permission": getattr(args, "approval", None),
         "acknowledge_auto_allow": getattr(args, "acknowledge_auto_allow", False),
     }
