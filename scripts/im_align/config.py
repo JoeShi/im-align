@@ -18,6 +18,10 @@ PROVIDER_TYPE_DOMAINS = {
     PROVIDER_FEISHU: "feishu",
     PROVIDER_LARK: "larksuite",
 }
+PROVIDER_CALLBACK_APPROVAL_TYPES = {
+    PROVIDER_FEISHU,
+    PROVIDER_LARK,
+}
 
 TIMEOUT_KEYS = (
     "debounce_seconds",
@@ -273,6 +277,8 @@ def load(cwd, cli_overrides=None):
     _check_user_config_mode(user_config_path())
     user = _read_yaml(user_config_path())
     repo = _read_yaml(repo_config_path(cwd))
+    raw_cli_overrides = dict(cli_overrides or {})
+    acknowledge_auto_allow = bool(raw_cli_overrides.pop("acknowledge_auto_allow", False))
 
     bad_user = set(user) - USER_ALLOWED_KEYS
     if bad_user:
@@ -288,12 +294,16 @@ def load(cwd, cli_overrides=None):
     defaults = _read_section(user.get("defaults"))
     defaults = _normalize_grouped_layer(defaults, "defaults", USER_DEFAULT_ALLOWED_SECTIONS)
     repo = _normalize_grouped_layer(repo, "repository-level .im-align.yaml", REPO_GROUPED_SECTION_KEYS, allow_initiator=True)
+    if repo.get("permission") == POLICY_AUTO_ALLOW:
+        raise ConfigError("repository-level .im-align.yaml approval.mode cannot be auto_allow")
     cli_overrides = _normalize_grouped_layer(
-        cli_overrides or {},
+        raw_cli_overrides,
         "CLI overrides",
         GROUPED_SECTION_KEYS,
         legacy_flat_keys=set(DEFAULTS) - {"args", "command"} | {"command", "args"},
     )
+    if cli_overrides.get("permission") == POLICY_AUTO_ALLOW and not acknowledge_auto_allow:
+        raise ConfigError("CLI approval.mode auto_allow requires --acknowledge-auto-allow")
 
     merged = dict(DEFAULTS)
     merged.update({k: v for k, v in defaults.items() if v is not None})
@@ -319,6 +329,8 @@ def validate(cfg):
         raise ConfigError("im.provider must resolve to a non-empty provider key")
     if cfg["provider_type"] not in PROVIDER_TYPE_DOMAINS:
         raise ConfigError("provider type must be feishu or lark")
+    if cfg["permission"] == POLICY_CALLBACK and cfg["provider_type"] not in PROVIDER_CALLBACK_APPROVAL_TYPES:
+        raise ConfigError(f"provider type {cfg['provider_type']} does not support callback Approval")
     if not cfg["feishu_app_id"] or not cfg["feishu_app_secret"]:
         raise ConfigError(f"missing Feishu/Lark credentials; run `bridge.py setup` first to write {user_config_path()}")
     if cfg["feishu_domain"] not in ("feishu", "larksuite"):

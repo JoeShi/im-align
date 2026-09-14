@@ -47,6 +47,8 @@ def build_parser():
     s.add_argument("--chat", default=None, help="Feishu/Lark group chat_id (oc_...)")
     s.add_argument("--backend", default=None, choices=["opencode", "trae-cli", "kiro-cli", "kimi"])
     s.add_argument("--model", default=None, help="model identifier; omit to keep the Agent's current selection")
+    s.add_argument("--approval", default=None, choices=[cfgmod.POLICY_CALLBACK, cfgmod.POLICY_AUTO_ALLOW], help="temporary Approval mode override")
+    s.add_argument("--acknowledge-auto-allow", action="store_true", help="confirm the risk of using --approval auto_allow")
     s.add_argument("--initiator", default=None, help="initiator email or open_id")
     s.add_argument("--foreground", action="store_true", help="run in foreground for debugging")
     s.add_argument("--json", action="store_true", help="emit stable JSON")
@@ -214,6 +216,8 @@ def _overrides(args):
         "chat_id": getattr(args, "chat", None),
         "backend": getattr(args, "backend", None),
         "model": getattr(args, "model", None),
+        "permission": getattr(args, "approval", None),
+        "acknowledge_auto_allow": getattr(args, "acknowledge_auto_allow", False),
     }
 
 
@@ -576,6 +580,8 @@ def _execute_record(run_id, resume=None):
                     "chat_id": record["chat_id"],
                     "backend": record["backend"],
                     "model": record.get("model", ""),
+                    "permission": record["permission"],
+                    "acknowledge_auto_allow": record["permission"] == cfgmod.POLICY_AUTO_ALLOW,
                 },
             )
             provider = FeishuProvider(

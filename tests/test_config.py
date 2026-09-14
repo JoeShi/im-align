@@ -376,6 +376,58 @@ class ConfigLoadTests(unittest.TestCase):
             with self.assertRaisesRegex(config.ConfigError, "chat_id"):
                 config.load(cwd)
 
+    def test_repository_callback_approval_is_allowed(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_repo_config(cwd, {"approval": {"mode": "callback"}})
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["approval"], {"mode": "callback"})
+
+    def test_repository_auto_allow_approval_is_rejected(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+            self.write_repo_config(cwd, {"approval": {"mode": "auto_allow"}})
+
+            with self.assertRaisesRegex(config.ConfigError, "approval.mode.*auto_allow"):
+                config.load(cwd)
+
+    def test_user_auto_allow_approval_is_allowed(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                self.user_config(
+                    {
+                        "im": {"chat_id": "oc_user"},
+                        "approval": {"mode": "auto_allow"},
+                    }
+                )
+            )
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["approval"], {"mode": "auto_allow"})
+
+    def test_cli_auto_allow_requires_acknowledgement(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
+
+            with self.assertRaisesRegex(config.ConfigError, "acknowledge-auto-allow"):
+                config.load(cwd, {"approval": {"mode": "auto_allow"}})
+
+            loaded = config.load(cwd, {"approval": {"mode": "auto_allow"}, "acknowledge_auto_allow": True})
+            self.assertEqual(loaded["approval"], {"mode": "auto_allow"})
+
+    def test_start_parser_forwards_approval_override_acknowledgement(self):
+        args = bridge.build_parser().parse_args(
+            ["start", "topic", "--approval", "auto_allow", "--acknowledge-auto-allow"]
+        )
+
+        overrides = bridge._overrides(args)
+
+        self.assertEqual(overrides["permission"], "auto_allow")
+        self.assertTrue(overrides["acknowledge_auto_allow"])
+
     def test_grouped_section_must_be_mapping(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             self.write_user_config(self.user_config({"im": {"chat_id": "oc_user"}}))
@@ -398,6 +450,7 @@ class ConfigLoadTests(unittest.TestCase):
             ({"backend": "opencode"}, "backend"),
             ({"command": "opencode"}, "command"),
             ({"args": ["acp"]}, "args"),
+            ({"permission": "callback"}, "permission"),
             ({"app_id": "cli_repo"}, "app_id"),
             ({"app_secret": "secret"}, "app_secret"),
             ({"providers": {}}, "providers"),
