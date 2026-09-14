@@ -212,11 +212,12 @@ def _prepare_record(args):
     cwd = os.path.abspath(os.getcwd())
     identity.ensure_git_repo(cwd)
     config = cfgmod.load(cwd, _overrides(args))
+    agent = config["agent"]
     argv = cfgmod.backend_argv(
-        config["backend"],
-        config.get("model"),
-        config.get("command"),
-        config.get("args"),
+        agent["backend"],
+        agent.get("model"),
+        agent.get("command"),
+        agent.get("args"),
     )
     if not shutil.which(argv[0]):
         raise RuntimeError(f"Agent Backend command {argv[0]!r} was not found; install it or fix configuration")
@@ -242,12 +243,12 @@ def _prepare_record(args):
         "run_id": state.new_run_id(),
         "state": state.STATE_STARTING,
         "topic": args.topic.strip(),
-        "skill": config["skill"],
-        "chat_id": config["chat_id"],
-        "backend": config["backend"],
-        "model": config.get("model", ""),
+        "skill": agent["skill"],
+        "chat_id": config["im"]["chat_id"],
+        "backend": agent["backend"],
+        "model": agent.get("model", ""),
         "agent_argv": argv,
-        "permission": config["permission"],
+        "permission": config["approval"]["mode"],
         "cwd": cwd,
         "initiator_email": claim.get("email", ""),
         "initiator_open_id": claim["open_id"],
@@ -572,13 +573,13 @@ def _execute_record(run_id, resume=None):
                 config["feishu_domain"],
             )
             orchestrator = Orchestrator(provider, config, record)
-            on_permission = None if config["permission"] == cfgmod.POLICY_AUTO_ALLOW else orchestrator.on_permission
+            on_permission = None if config["approval"]["mode"] == cfgmod.POLICY_AUTO_ALLOW else orchestrator.on_permission
             client = AcpClient(
                 record["agent_argv"],
                 record["cwd"],
                 on_permission=on_permission,
-                approval_timeout=timedelta(seconds=config["approval_timeout_seconds"]),
-                turn_timeout=timedelta(seconds=config["turn_timeout_seconds"]),
+                approval_timeout=timedelta(seconds=config["timeouts"]["approval_timeout_seconds"]),
+                turn_timeout=timedelta(seconds=config["timeouts"]["turn_timeout_seconds"]),
             )
             client.set_model(record.get("model", ""))
             provider.start()

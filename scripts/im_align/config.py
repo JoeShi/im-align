@@ -12,6 +12,13 @@ BACKEND_KIMI = "kimi"
 POLICY_CALLBACK = "callback"
 POLICY_AUTO_ALLOW = "auto_allow"
 
+TIMEOUT_KEYS = (
+    "debounce_seconds",
+    "approval_timeout_seconds",
+    "turn_timeout_seconds",
+    "idle_timeout_seconds",
+)
+
 DEFAULTS = {
     "provider": "feishu",
     "chat_id": "",
@@ -27,6 +34,24 @@ DEFAULTS = {
     "permission": POLICY_CALLBACK,
 }
 
+GROUPED_SECTION_KEYS = {
+    "im": {
+        "provider": "provider",
+        "chat_id": "chat_id",
+    },
+    "agent": {
+        "backend": "backend",
+        "model": "model",
+        "skill": "skill",
+        "command": "command",
+        "args": "args",
+    },
+    "timeouts": {key: key for key in TIMEOUT_KEYS},
+    "approval": {
+        "mode": "permission",
+    },
+}
+
 REPO_ALLOWED_KEYS = {
     "chat_id",
     "backend",
@@ -40,6 +65,10 @@ REPO_ALLOWED_KEYS = {
     "idle_timeout_seconds",
     "permission",
     "initiator",
+    "im",
+    "agent",
+    "timeouts",
+    "approval",
 }
 
 DANGEROUS_ARGV_SUBSTRINGS = (
@@ -94,6 +123,70 @@ def _read_section(value):
     return value
 
 
+def _normalize_grouped_layer(data, source):
+    """Accept grouped config while reusing the existing flat validation keys."""
+    normalized = {}
+    for key, value in data.items():
+        if key == "initiator":
+            if value is not None and not isinstance(value, dict):
+                raise ConfigError(f"{source}.initiator must be a mapping")
+            normalized[key] = value
+            continue
+        if key not in GROUPED_SECTION_KEYS:
+            if key in normalized:
+                raise ConfigError(
+                    f"{source} defines {key!r} more than once; use either the grouped field or the legacy flat field"
+                )
+            normalized[key] = value
+            continue
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise ConfigError(f"{source}.{key} must be a mapping")
+        allowed = GROUPED_SECTION_KEYS[key]
+        bad = set(value) - set(allowed)
+        if bad:
+            bad_keys = ", ".join(f"{key}.{name}" for name in sorted(bad))
+            raise ConfigError(f"{source} contains unsupported grouped keys: {bad_keys}")
+        for grouped_key, flat_key in allowed.items():
+            if grouped_key not in value or value[grouped_key] is None:
+                continue
+            if flat_key in normalized:
+                raise ConfigError(
+                    f"{source} defines {flat_key!r} more than once; use either the grouped field or the legacy flat field"
+                )
+            normalized[flat_key] = value[grouped_key]
+    return normalized
+
+
+def _with_grouped_sections(cfg):
+    grouped = {
+        "feishu_app_id": cfg["feishu_app_id"],
+        "feishu_app_secret": cfg["feishu_app_secret"],
+        "feishu_domain": cfg["feishu_domain"],
+    }
+    if "initiator" in cfg and cfg["initiator"] is not None:
+        if not isinstance(cfg["initiator"], dict):
+            raise ConfigError("initiator must be a mapping")
+        grouped["initiator"] = cfg["initiator"]
+    grouped["im"] = {
+        "provider": cfg["provider"],
+        "chat_id": cfg["chat_id"],
+    }
+    grouped["agent"] = {
+        "backend": cfg["backend"],
+        "model": cfg.get("model", ""),
+        "skill": cfg["skill"],
+        "command": cfg.get("command", ""),
+        "args": list(cfg.get("args", [])),
+    }
+    grouped["timeouts"] = {key: cfg[key] for key in TIMEOUT_KEYS}
+    grouped["approval"] = {
+        "mode": cfg["permission"],
+    }
+    return grouped
+
+
 def _check_user_config_mode(path):
     try:
         mode = stat.S_IMODE(os.stat(path).st_mode)
@@ -117,10 +210,14 @@ def load(cwd, cli_overrides=None):
         )
 
     defaults = _read_section(user.get("defaults"))
+    defaults = _normalize_grouped_layer(defaults, "defaults")
+    repo = _normalize_grouped_layer(repo, "repository-level .im-align.yaml")
+    cli_overrides = _normalize_grouped_layer(cli_overrides or {}, "CLI overrides")
+
     merged = dict(DEFAULTS)
     merged.update({k: v for k, v in defaults.items() if v is not None})
     merged.update({k: v for k, v in repo.items() if v is not None})
-    merged.update({k: v for k, v in (cli_overrides or {}).items() if v is not None})
+    merged.update({k: v for k, v in cli_overrides.items() if v is not None})
 
     providers = user.get("providers") or {}
     feishu = _read_section(providers.get("feishu"))
@@ -128,7 +225,7 @@ def load(cwd, cli_overrides=None):
     merged["feishu_app_secret"] = feishu.get("app_secret", "")
     merged["feishu_domain"] = feishu.get("domain", "feishu")
     validate(merged)
-    return merged
+    return _with_grouped_sections(merged)
 
 
 def validate(cfg):
@@ -152,7 +249,7 @@ def validate(cfg):
         raise ConfigError("args must be an array of strings")
     if cfg.get("args") and not cfg.get("command"):
         raise ConfigError("args requires command; overriding argv means taking responsibility for the full argv")
-    for key in ("debounce_seconds", "approval_timeout_seconds", "turn_timeout_seconds", "idle_timeout_seconds"):
+    for key in TIMEOUT_KEYS:
         if not isinstance(cfg[key], int) or cfg[key] <= 0:
             raise ConfigError(f"{key} must be a positive integer")
 

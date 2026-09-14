@@ -59,8 +59,8 @@ class Orchestrator:
         self.provider = provider
         self.cfg = cfg
         self.record = record
-        self._debounce = cfg["debounce_seconds"]
-        self._idle = cfg["idle_timeout_seconds"]
+        self._debounce = cfg["timeouts"]["debounce_seconds"]
+        self._idle = cfg["timeouts"]["idle_timeout_seconds"]
         self._pending = []
         self._debounce_deadline = 0.0
         self._turn_busy = threading.Event()
@@ -88,7 +88,7 @@ class Orchestrator:
             approval_id, self.record["initiator_open_id"]
         )
         card = cards.approval_card(
-            approval_id, req, self.cfg["approval_timeout_seconds"]
+            approval_id, req, self.cfg["timeouts"]["approval_timeout_seconds"]
         )
         try:
             card_message_id = self.provider.reply_card(self.record["root_message_id"], card)
@@ -98,7 +98,7 @@ class Orchestrator:
             return PermissionDecision("cancel")
         log.info("Approval card sent req=%s title=%r", approval_id, req.title)
 
-        ok = handle.event.wait(timeout=self.cfg["approval_timeout_seconds"] - 5)
+        ok = handle.event.wait(timeout=self.cfg["timeouts"]["approval_timeout_seconds"] - 5)
         self.provider.cancel_approval(approval_id)
         if not ok:
             self.provider.reply_card(
