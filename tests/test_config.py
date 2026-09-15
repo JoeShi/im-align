@@ -524,6 +524,42 @@ class ConfigLoadTests(unittest.TestCase):
         self.assertEqual(overrides["permission"], "auto_allow")
         self.assertTrue(overrides["acknowledge_auto_allow"])
 
+    def test_callback_approval_fails_for_callback_unsupported_provider(self):
+        # Every type in PROVIDER_TYPE_DOMAINS currently supports callbacks, so
+        # the guard is unreachable through load(); register a hypothetical
+        # future type to exercise the startup failure path.
+        cfg = dict(config.DEFAULTS)
+        cfg.update(
+            {
+                "provider": "work",
+                "provider_type": "wecom",
+                "permission": "callback",
+                "feishu_app_id": "cli_work",
+                "feishu_app_secret": "secret",
+                "feishu_domain": "feishu",
+                "chat_id": "oc_work",
+                "command": "",
+            }
+        )
+
+        with mock.patch.dict(config.PROVIDER_TYPE_DOMAINS, {"wecom": "feishu"}):
+            with self.assertRaisesRegex(config.ConfigError, "does not support callback Approval"):
+                config.validate(cfg)
+
+    def test_cli_provider_override_missing_key_fails(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config())
+
+            with self.assertRaisesRegex(config.ConfigError, "does not exist"):
+                config.load(cwd, {"im": {"provider": "missing"}})
+
+    def test_cli_command_alias_missing_fails(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config())
+
+            with self.assertRaisesRegex(config.ConfigError, "does not exist"):
+                config.load(cwd, {"agent": {"command_alias": "missing"}})
+
     def test_command_alias_resolves_trusted_user_command_plan(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config(
@@ -545,6 +581,23 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertEqual(loaded["agent"]["command_alias"], "safe-opencode")
             self.assertEqual(loaded["agent"]["command"], "opencode")
             self.assertEqual(loaded["agent"]["args"], ["acp"])
+
+    def test_command_alias_requires_backend_and_command(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config()
+            data["commands"] = {"broken": {"command": "safe-wrapper"}}
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "commands.broken.backend"):
+                config.load(cwd)
+
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config()
+            data["commands"] = {"broken": {"backend": "opencode"}}
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "commands.broken.command"):
+                config.load(cwd)
 
     def test_command_alias_args_default_to_empty_list(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
