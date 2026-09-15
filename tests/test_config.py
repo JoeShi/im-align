@@ -379,6 +379,15 @@ class ConfigLoadTests(unittest.TestCase):
             with self.assertRaisesRegex(config.ConfigError, "does not exist"):
                 config.load(cwd)
 
+    def test_missing_providers_fails_with_setup_hint(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            data = self.user_config()
+            data["providers"] = {}
+            self.write_user_config(data)
+
+            with self.assertRaisesRegex(config.ConfigError, "missing Feishu/Lark credentials"):
+                config.load(cwd)
+
     def test_provider_domain_is_not_user_facing_schema(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             data = self.user_config()
