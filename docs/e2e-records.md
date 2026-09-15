@@ -103,3 +103,27 @@ kimi, CLI 0.42.0 with native `kimi acp`, was validated as the fourth backend in 
 - Full acceptance passed: state `done`, `spec_path` inside cwd, regular file, ModTime belonging to this attempt, Thread received an `Alignment Complete` card, `bridge_resume_command` was usable, `backend_resume_command` stayed empty because kimi native `-S` session ID namespace has not been validated and is recorded in ADR-0003 plus the client docstring, no branch/commit/push, and no residual processes.
 - Difference from the kiro full-level run: kimi showed no Approval card throughout this round. Per the Q4 conclusion, this Approval difference is covered rather than missing, because Bash had triggered Approval and file writes are allowed by default.
 - The 60-second worker claim window was sufficient in this round; Defender scanning the venv caused daytime cold starts around 10 to 30 seconds.
+
+## Debounce Removal + Watchdog Hang Real-Machine Verification (2026-09-15)
+
+Context: the debounce batching was removed from the orchestrator (replies now flush into one Turn as soon as the current Turn is free). Two Feishu/Lark rounds with opencode verified the change and exposed a pre-existing watchdog defect.
+
+**Initiator resolution note**: `hellojoeshi@gmail.com` stopped resolving through the bot contact API (`batch_get_id` succeeded but returned no match) even after the email was bound in the Feishu account; the workaround was `bridge.py start --initiator ou_664703e94a0fe9e7266e2dc3f84ad505` (same-app open_id from history). Startup email resolution remains a single point of failure for new repos.
+
+**Round 1 run `run-1789439169-73ee6b` (debounce behavior, Approval chain, watchdog defect)**:
+
+- The agent used lark-cli (`--as user`, scope `im:message`, later plus `im:message:readonly` and `im:message.reactions:read`) to act as the user in the Thread; bot-sent messages are dropped by `sender_type == "bot"` filtering, so bot identity cannot simulate a participant. Interactive card callbacks still require a real client click.
+- Simulated Thread reply at 10:34:51 was handled by the Bridge at 10:34:54.749 (event delivery ~3.2 s) and the thinking card was created in the same minute with the new copy `starting one Agent Turn` (no `batching for 5s`). Under the old code the Turn could not have started before ~5 s of debounce plus delivery. Debounce removal verified.
+- The Agent tried to `cat ~/.local/state/im-align/...` (outside the repo), which the fs capability correctly escalated to an Approval card. Non-initiator gating held; an initiator `allow_always` click at 10:41:06 was accepted and recorded. Approval wait of 260 s crossed the 300 s Turn budget without a false timeout, confirming the watchdog pause accounting.
+- Defect: after the Approval resume, the Turn never completed and the watchdog never fired. Expected fire was ~10:44:14 (188 s remaining after resume); by 11:05 there was still no `Turn timed out` log, no card patch, and both the worker and the opencode subprocess were idle. Manual `bridge.py stop` reached a clean terminal `stopped`. Filed as issue #13 and fixed the same day (see below).
+
+**Round 2 run `run-1789441761-60d2f7` (sharp latency probe)**:
+
+- First Turn timed out at the 300 s budget (opencode again exceeded the estimate) and was cancelled cleanly; the card was patched 6 s after `session/cancel`.
+- Second reply at 11:19:16.9: Bridge event handling at 11:19:20.143 (+3.2 s, dominated by Feishu long-connection delivery), thinking card visible within the same poll cycle. No debounce anywhere in the chain. The Agent returned `stopReason=cancelled` with no text for this Turn, an opencode-side quirk after a Turn cancelled by the watchdog in the previous round; unrelated to the debounce change.
+
+**Issue #13 fix verification**:
+
+- Root cause class: the old watchdog restarted a `threading.Timer` per resume and counted `pause()` calls; a duplicated pause (or lost restart) made `resume()` skip rearming, stranding the Turn with no timeout and no log. The isolated mechanics could not reproduce the live interleaving, so the fix is by construction: a single evaluation loop recomputes the deadline from explicit state at most 1 s after any transition, with idempotent `pause()`/`resume()`, monotonic accounting, and INFO logging for pause/resume/fire.
+- Red-capable regression: `test_unbalanced_double_pause_single_resume_still_fires` fails on the old design and passes on the new one. `test_acp_incident_replay.py` replays the live timeline (prompt -> permission -> decision -> agent hangs) against a fake stdio JSON-RPC agent and asserts `client.prompt()` still terminates with a cancelled Turn within budget plus grace.
+- Full suite: 50 tests OK; `py_compile`, `bridge.py --help`, and `git diff --check` pass.

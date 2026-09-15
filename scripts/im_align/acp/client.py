@@ -230,7 +230,11 @@ class AcpClient:
         with self._turn_lock:
             self._begin_turn()
             cancel_event = threading.Event()
-            self._watchdog = TurnWatchdog(self._turn_timeout, cancel_event.set)
+            self._watchdog = TurnWatchdog(
+                self._turn_timeout,
+                cancel_event.set,
+                absolute_slack=self._approval_timeout,
+            )
             try:
                 slot = self._send_request(
                     "session/prompt",
@@ -413,8 +417,12 @@ class AcpClient:
             finally:
                 done.set()
 
-        if self._watchdog:
-            self._watchdog.pause()
+        # Capture the watchdog once: prompt() reassigns self._watchdog when a
+        # Turn ends, and pause/resume must stay on the instance that was
+        # current when the permission request arrived.
+        watchdog = self._watchdog
+        if watchdog:
+            watchdog.pause()
         threading.Thread(target=run, daemon=True).start()
         deadline = time.monotonic() + self._approval_timeout.total_seconds()
         resolved = False
@@ -425,8 +433,8 @@ class AcpClient:
             if done.wait(timeout=min(0.2, remaining)):
                 resolved = True
                 break
-        if self._watchdog:
-            self._watchdog.resume()
+        if watchdog:
+            watchdog.resume()
 
         if not resolved:
             if self._closing.is_set():
