@@ -65,7 +65,7 @@ One Thread maps to one Session. First Turn:
 3. A Session root message is sent to the configured group.
 4. The Agent receives `/<skill> <topic>` plus the completion contract.
 
-Thread replies immediately receive a best-effort emoji ack. Messages inside the 5-second debounce window are formatted as `Name: content` and sent to the Agent in one batch. `session/prompt` blocks until the Turn ends. The Bridge aggregates only `agent_message_chunk`, then sends one card; long text is split around 6000 characters.
+Thread replies immediately receive a best-effort emoji ack. Each reply is formatted as `Name: content` and sent to the Agent as soon as the current Turn is available. `session/prompt` blocks until the Turn ends. The Bridge aggregates only `agent_message_chunk`, then sends one card; long text is split around 6000 characters.
 
 Only replies in the root Thread enter the Session. Because of group mention-message scope limits, participants currently must mention the bot when replying in the Thread.
 

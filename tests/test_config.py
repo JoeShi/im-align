@@ -66,7 +66,6 @@ class ConfigLoadTests(unittest.TestCase):
                     {
                         "agent": {"backend": "opencode", "skill": "user-skill"},
                         "timeouts": {
-                            "debounce_seconds": 7,
                             "approval_timeout_seconds": 800,
                         },
                         "approval": {"mode": "callback"},
@@ -105,7 +104,6 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertEqual(
                 loaded["timeouts"],
                 {
-                    "debounce_seconds": 7,
                     "approval_timeout_seconds": 800,
                     "turn_timeout_seconds": 901,
                     "idle_timeout_seconds": 3600,
@@ -126,7 +124,7 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertEqual(loaded["im"], {"provider": "feishu", "type": "feishu", "chat_id": "oc_cli"})
             self.assertEqual(loaded["agent"]["backend"], "opencode")
             self.assertEqual(loaded["agent"]["skill"], "grill-with-docs")
-            self.assertEqual(loaded["timeouts"]["debounce_seconds"], 5)
+            self.assertNotIn("debounce_seconds", loaded["timeouts"])
             self.assertEqual(loaded["approval"], {"mode": "callback"})
             self.assertEqual(loaded["feishu_domain"], "feishu")
 
@@ -734,6 +732,14 @@ class ConfigLoadTests(unittest.TestCase):
             self.write_repo_config(cwd, {"im": {"thread": "oc_repo"}})
 
             with self.assertRaisesRegex(config.ConfigError, "im.thread"):
+                config.load(cwd)
+
+    def test_debounce_timeout_key_fails_fast(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config())
+            self.write_repo_config(cwd, {"timeouts": {"debounce_seconds": 5}})
+
+            with self.assertRaisesRegex(config.ConfigError, "timeouts.debounce_seconds"):
                 config.load(cwd)
 
     def test_repository_rejects_old_flat_fields_and_raw_command_plan(self):

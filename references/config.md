@@ -22,7 +22,6 @@ defaults:
     model: ""
     command_alias: safe-opencode
   timeouts:
-    debounce_seconds: 5
     approval_timeout_seconds: 600
     turn_timeout_seconds: 300
     idle_timeout_seconds: 1800
@@ -53,7 +52,6 @@ agent:
   skill: grill-with-docs
   command_alias: safe-opencode
 timeouts:
-  debounce_seconds: 5
   approval_timeout_seconds: 600
   turn_timeout_seconds: 300
   idle_timeout_seconds: 1800

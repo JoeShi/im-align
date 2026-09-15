@@ -14,7 +14,7 @@ Host Agent -> im-align Skill -> Python Bridge
 
 - One Feishu/Lark Thread maps to one Session.
 - The default Alignment Skill is `grill-with-docs` from the target repository.
-- User replies are debounced for 5 seconds, batched as `Name: content`, and sent to the Agent.
+- User replies are formatted as `Name: content` and sent to the Agent as soon as the current Turn is available.
 - The Bridge replies to the Thread only after the Agent Turn finishes.
 - The completion signal is strictly validated, and the Spec remains a local file in the current repository.
 - After the Bridge exits, developers may continue with the backend's native session command, but im-align does not enter coding automatically.

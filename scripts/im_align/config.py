@@ -24,7 +24,6 @@ PROVIDER_CALLBACK_APPROVAL_TYPES = {
 }
 
 TIMEOUT_KEYS = (
-    "debounce_seconds",
     "approval_timeout_seconds",
     "turn_timeout_seconds",
     "idle_timeout_seconds",
@@ -39,7 +38,6 @@ DEFAULTS = {
     "command_alias": "",
     "command": "",
     "args": [],
-    "debounce_seconds": 5,
     "approval_timeout_seconds": 600,
     "turn_timeout_seconds": 300,
     "idle_timeout_seconds": 1800,

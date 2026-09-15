@@ -1,7 +1,7 @@
-"""Session orchestration: IM events -> debounce batching -> ACP Turn -> completion detection.
+"""Session orchestration: IM events -> ACP Turn -> completion detection.
 
 Behavior matches the interaction model from legacy/go/internal/lark/bot.go:
-  - root message opens the Session; Thread replies get emoji ack + debounce;
+  - root message opens the Session; Thread replies get emoji ack + queued Turn;
   - Turn start sends a blue thinking card, and Turn end patches it with output;
   - completion signal is strictly validated in completion.py; Approval uses Provider card callbacks;
   - idle timeout closes the run, and terminal state feeds host Agent resume handoff.
@@ -13,9 +13,8 @@ import time
 from datetime import datetime
 
 from . import cards, state
-from .acp.client import AcpClient, PermissionDecision
+from .acp.client import PermissionDecision
 from .completion import parse_completion
-from .config import POLICY_AUTO_ALLOW
 from .textutil import chunk_runes
 
 log = logging.getLogger("im_align.orchestrator")
@@ -59,10 +58,8 @@ class Orchestrator:
         self.provider = provider
         self.cfg = cfg
         self.record = record
-        self._debounce = cfg["timeouts"]["debounce_seconds"]
         self._idle = cfg["timeouts"]["idle_timeout_seconds"]
         self._pending = []
-        self._debounce_deadline = 0.0
         self._turn_busy = threading.Event()
         self._stop_requested = False
         self._stop_deadline = None
@@ -152,14 +149,13 @@ class Orchestrator:
             now = time.time()
             for ev in events:
                 self._handle_event(ev)
-                self._debounce_deadline = now + self._debounce
             if self._stop_requested:
                 if self._turn_busy.is_set() and (
                     self._stop_deadline is None or now < self._stop_deadline
                 ):
                     continue
                 return state.STATE_DONE if self.record["state"] == state.STATE_DONE else state.STATE_STOPPED
-            if self._pending and not self._turn_busy.is_set() and now >= self._debounce_deadline:
+            if self._pending and not self._turn_busy.is_set():
                 self._flush()
             if self._check_idle(now):
                 return state.STATE_IDLE_TIMEOUT
@@ -201,6 +197,8 @@ class Orchestrator:
             name = self.provider.user_name(ev.sender_open_id)
             self._pending.append(f"{name}: {ev.text}")
             self._touch()
+            if not self._turn_busy.is_set():
+                self._flush()
             return
         if not ev.root_id:
             # Bot mentions outside this Session get usage help.
@@ -215,7 +213,7 @@ class Orchestrator:
     def _flush(self):
         lines = self._pending
         self._pending = []
-        batch = "\n".join(lines)
+        prompt_text = "\n".join(lines)
         self._turn_busy.set()
 
         thinking_id = ""
@@ -225,7 +223,7 @@ class Orchestrator:
                 cards.simple_card(
                     "blue",
                     "⏳ Agent Is Thinking",
-                    f"Received {len(lines)} replies; batching for {self._debounce}s before one Agent Turn. Estimated Turn time: 1.5 to 2.5 minutes...",
+                    f"Received {len(lines)} replies; starting one Agent Turn. Estimated Turn time: 1.5 to 2.5 minutes...",
                 ),
             )
         except Exception as e:
@@ -233,7 +231,7 @@ class Orchestrator:
 
         def work():
             try:
-                turn = self.record["client"].prompt(self.record["acp_session_id"], batch)
+                turn = self.record["client"].prompt(self.record["acp_session_id"], prompt_text)
                 self._finish_turn(thinking_id, turn)
             except Exception as e:
                 if self._stop_requested:

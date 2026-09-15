@@ -59,7 +59,7 @@ Acceptance:
 2. The group receives a new Alignment Session root message.
 3. The Thread receives the first Agent card.
 4. After the user mentions the bot in the Thread, the message receives an emoji ack.
-5. After debounce, the Agent produces an aggregated reply.
+5. The Agent starts a reply Turn without a debounce delay.
 6. `status --json` has populated root_message_id and acp_session_id.
 
 ### Full Level
