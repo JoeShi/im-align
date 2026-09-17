@@ -340,8 +340,15 @@ class GitAssertionTests(unittest.TestCase):
     def _repo(self, tmp: str) -> Path:
         workspace = Path(tmp)
         subprocess.run(["git", "init", "--quiet"], cwd=workspace, check=True)
+        # CI runners have no ambient git identity; the seed commit fails
+        # with exit 128 without an explicit one (measured 2026-09-17).
         subprocess.run(
-            ["git", "commit", "--quiet", "--allow-empty", "-m", "seed"],
+            [
+                "git",
+                "-c", "user.name=im-align-e2e",
+                "-c", "user.email=im-align-e2e@localhost",
+                "commit", "--quiet", "--allow-empty", "-m", "seed",
+            ],
             cwd=workspace,
             check=True,
         )
@@ -394,7 +401,13 @@ class GitAssertionTests(unittest.TestCase):
             before = snapshot_git(workspace)
             (workspace / "x").write_text("x", encoding="utf-8")
             git(workspace, "add", "x")
-            git(workspace, "commit", "--quiet", "-m", "extra")
+            # Same ambient-identity constraint as _repo above.
+            git(
+                workspace,
+                "-c", "user.name=im-align-e2e",
+                "-c", "user.email=im-align-e2e@localhost",
+                "commit", "--quiet", "-m", "extra",
+            )
             after = snapshot_git(workspace)
             self.assertFalse(git_unchanged_except(before, after, []))
 

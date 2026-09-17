@@ -111,8 +111,16 @@ def materialize_seed(scenario: Scenario, workspace: Path, cloner: SeedCloner | N
         shutil.copytree(scenario.seed_dir, workspace, dirs_exist_ok=True)
     if not (workspace / ".git").exists():
         subprocess.run(["git", "init", "--quiet"], cwd=workspace, check=True, timeout=60)
+        # CI runners have no ambient git identity, so an explicit one is
+        # required or the seed commit fails with exit 128 (measured
+        # 2026-09-17 on the ubuntu-latest unit job).
         subprocess.run(
-            ["git", "commit", "--quiet", "--allow-empty", "-m", "seed"],
+            [
+                "git",
+                "-c", "user.name=im-align-e2e",
+                "-c", "user.email=im-align-e2e@localhost",
+                "commit", "--quiet", "--allow-empty", "-m", "seed",
+            ],
             cwd=workspace,
             check=True,
             timeout=60,
