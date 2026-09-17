@@ -1,0 +1,62 @@
+name: backend-smoke
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # Real Agent Backend x real Feishu Thread with the LLM User Simulator.
+  # Shares the single-session concurrency group with ci.yml's im-integration.
+  #
+  # Prerequisites on the runner image: opencode installed and authenticated. GitHub-hosted
+  # runners do not provide them, so this job targets the self-hosted
+  # `im-align-e2e` runner label with `gh`, node/npm, and the backend binaries.
+  # Credentials include the supported as-user Participant identity, a rotating
+  # refresh token plus a fine-grained GitHub Secrets: write PAT, and
+  # SIMULATOR_LLM_BASE_URL/API_KEY/MODEL and EVALUATOR_LLM_BASE_URL/API_KEY/MODEL.
+  # Bot mode remains a manual platform re-probe and is intentionally not part
+  # of this acceptance gate (ADR-0009). Credential-writer secrets execute
+  # only the workflow revision on refs/heads/main.
+  smoke:
+    if: vars.IM_ALIGN_E2E_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, im-align-e2e]
+    timeout-minutes: 35
+    env:
+      IM_ALIGN_E2E_RUNS_DIR: ${{ runner.temp }}/im-align-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+    concurrency:
+      group: im-align-feishu-single-session
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # The smoke harness installs the pinned Skill Bundle per isolated
+      # workspace. The self-hosted runner must provide node/npm; keep the
+      # installer version and bundle source in tests/e2e/skill-bundles.yaml.
+      - run: uv sync --frozen
+      - name: Refresh test-user OAuth token
+        env:
+          IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
+          IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
+          IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN: ${{ secrets.IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN }}
+          IM_ALIGN_E2E_GITHUB_SECRETS_PAT: ${{ secrets.IM_ALIGN_E2E_GITHUB_SECRETS_PAT }}
+        run: uv run --frozen python -m tests.e2e.refresh_user_token
+      - env:
+          IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
+          IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
+          IM_ALIGN_E2E_CHAT_ID: ${{ secrets.IM_ALIGN_E2E_CHAT_ID }}
+          SIMULATOR_LLM_BASE_URL: ${{ secrets.SIMULATOR_LLM_BASE_URL }}
+          SIMULATOR_LLM_API_KEY: ${{ secrets.SIMULATOR_LLM_API_KEY }}
+          SIMULATOR_LLM_MODEL: ${{ secrets.SIMULATOR_LLM_MODEL }}
+          EVALUATOR_LLM_BASE_URL: ${{ secrets.EVALUATOR_LLM_BASE_URL }}
+          EVALUATOR_LLM_API_KEY: ${{ secrets.EVALUATOR_LLM_API_KEY }}
+          EVALUATOR_LLM_MODEL: ${{ secrets.EVALUATOR_LLM_MODEL }}
+        run: uv run --frozen python -m tests.e2e.smoke_runner tests/e2e/scenarios/todo-greenfield --backend opencode --participant-mode as-user --strict
+      - name: Upload L3 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: l3-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.IM_ALIGN_E2E_RUNS_DIR }}
+          if-no-files-found: warn
+          retention-days: 7

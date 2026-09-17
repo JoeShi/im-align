@@ -16,17 +16,18 @@ providers:
 defaults:
   im:
     provider: work
+    # Optional (ADR-0006): bots whose Thread messages drive Turns like
+    # participants. Empty default keeps every bot message discarded.
+    extra_participant_open_ids: []
   agent:
     backend: opencode # or trae-cli / kiro-cli / kimi
     skill: grill-with-docs
     model: ""
+    spec_root: docs/specs # optional; defaults to docs/specs, see ADR-0005
     command_alias: safe-opencode
   timeouts:
-    approval_timeout_seconds: 600
     turn_timeout_seconds: 300
     idle_timeout_seconds: 1800
-  approval:
-    mode: callback # or auto_allow
 commands:
   safe-opencode:
     backend: opencode
@@ -46,27 +47,24 @@ Path: `.im-align.yaml` at the current git worktree root. It may be committed, bu
 im:
   provider: work
   chat_id: oc_xxx
+  # Optional (ADR-0006): allowlisted bot participants for CI customer
+  # simulation; empty default keeps every bot message discarded.
+  extra_participant_open_ids: []
 agent:
   backend: opencode
   model: ""
   skill: grill-with-docs
+  # Optional (ADR-0005): the only repository-relative directory where the
+  # Bridge permits Spec writes. Defaults to docs/specs. Must not be absolute,
+  # equal to '.', or contain '..' components.
+  spec_root: docs/specs
   command_alias: safe-opencode
 timeouts:
-  approval_timeout_seconds: 600
   turn_timeout_seconds: 300
   idle_timeout_seconds: 1800
-approval:
-  mode: callback
-# Optional; avoids resolving identity each time. open_id must belong to
-# the Feishu/Lark app used by the im-align bot.
-# This is personal information; confirm team policy before committing.
-initiator:
-  email: developer@example.com
-  open_id: ou_xxx
-  name: Developer
 ```
 
-Repository config is strict: old flat fields, `providers`, `app_id`, `app_secret`, `agent.command`, and `agent.args` are rejected.
+Repository config is strict: old flat fields, the removed `approval` section, `providers`, `app_id`, `app_secret`, `agent.command`, and `agent.args` are rejected. The removed legacy `initiator` field is ignored so existing repositories can upgrade without a migration step.
 
 ## Resolution Rules
 
@@ -74,13 +72,14 @@ Repository config is strict: old flat fields, `providers`, `app_id`, `app_secret
 - Chat selection: CLI `--chat`, then repository `im.chat_id`, then selected provider `default_chat_id`.
 - Agent Backend selection: CLI `--backend`, then repository `agent.backend`, then user `defaults.agent.backend`, then the built-in default.
 - Command alias selection: CLI `--command-alias`, then repository `agent.command_alias`, then user `defaults.agent.command_alias`; if empty, built-in backend argv is used.
-- Approval selection: CLI `--approval`, then repository `approval.mode`, then user `defaults.approval.mode`, then `callback`.
+- Spec Root selection: repository `agent.spec_root`, then user `defaults.agent.spec_root`, then the built-in `docs/specs` default.
 
 ## Safety Boundaries
 
-- Repository config may tighten Approval with `approval.mode: callback`, but it may not set `approval.mode: auto_allow`.
-- CLI `--approval auto_allow` requires `--acknowledge-auto-allow`.
-- User-level defaults may set `approval.mode: auto_allow` for local trusted workflows.
+- The Permission Policy allows read/search/fetch/think once and allows edits once only when every resolved real target is a file inside `agent.spec_root` (ADR-0005). Execute, delete, move, unknown, outside-root, and unverifiable operations are rejected.
+- Bot messages are discarded unless the sender's open_id is in `im.extra_participant_open_ids` (ADR-0006). Allowlisted bots drive Turns; keep the list empty outside dedicated CI setups.
+- Thread messages cannot stop a Session. Use the local `bridge.py stop` command for lifecycle control (ADR-0007).
+- The Agent Backend must be configured to ask for native restricted operations. A Backend that bypasses ACP permission requests is outside the Bridge enforcement boundary.
 - Command aliases are trusted executable plans and may exist only in user-level `commands`.
 - A command alias must declare the same `backend` as the final resolved `agent.backend`.
 - Command alias argv is checked for known dangerous parameters such as `bypass_permissions`, `--yolo`, `trust-all-tools`, and `trust-tools`.

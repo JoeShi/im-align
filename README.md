@@ -6,10 +6,11 @@ Scope is strictly limited to pre-coding work: no coding, no branch creation, no 
 
 ## Architecture
 
-```text
-Host Agent -> im-align Skill -> Python Bridge
-                                  |- Feishu/Lark long connection <-> Thread participants
-                                  `- ACP stdio <-> opencode / trae-cli / kiro-cli / kimi
+```mermaid
+flowchart LR
+    host[Host Agent] --> skill[im-align Skill] --> bridge[Python Bridge]
+    bridge <-->|Feishu/Lark long connection| thread[Thread participants]
+    bridge <-->|ACP over stdio| backend[opencode / trae-cli / kiro-cli / kimi]
 ```
 
 - One Feishu/Lark Thread maps to one Session.
@@ -30,7 +31,13 @@ Requirements:
 - `opencode`, `traecli`, `kiro-cli`, or `kimi`
 - A Feishu/Lark custom app configured for long connections
 
-The Skill is the whole directory, not only `SKILL.md`. Install this repository into the host Agent's Skill directory, for example `.agents/skills/im-align/` in the target repository, and keep these files together:
+From the target repository, install im-align with the Skills CLI and select the host Agents when prompted:
+
+```sh
+npx skills add JoeShi/im-align
+```
+
+Alternatively, install it manually. The Skill is the whole directory, not only `SKILL.md`. Copy this repository into the host Agent's Skill directory, for example `.agents/skills/im-align/` in the target repository, and keep these files together:
 
 ```text
 SKILL.md
@@ -53,11 +60,11 @@ uv run --frozen python scripts/bridge.py --help
 The Feishu/Lark app must enable bot capability and subscribe through long connections:
 
 - Event: `im.message.receive_v1`
-- Callback: `card.action.trigger`
 
 Scope definitions and detailed setup steps:
 
 - `references/lark-scopes.json`
+- `references/lark-e2e-simulator-scopes.json` (test-only bot Participant Mode)
 - `references/feishu-setup.md`
 
 Initial setup:
@@ -70,13 +77,13 @@ App Secret is written only to `~/.config/im-align/config.yaml` with file mode `0
 
 ## Usage
 
-Normally the host Agent should invoke the Bridge according to `SKILL.md`. For direct CLI debugging:
+Normally the host Agent invokes the Bridge according to `SKILL.md`. The same CLI also works directly for a developer without a host Agent:
 
 ```sh
 # Start from the current git repository; returns run_id immediately.
 uv run --frozen python scripts/bridge.py start "Align requirements for a CLI todo tool" --json
 
-# Bounded wait so the caller does not hang indefinitely.
+# Bounded wait: returns as soon as the run reaches a terminal state; --timeout is only an upper bound.
 uv run --frozen python scripts/bridge.py wait <run-id> --timeout 600 --json
 
 uv run --frozen python scripts/bridge.py status <run-id> --json
@@ -91,7 +98,7 @@ Terminal states:
 - `done`: the Spec was written and passed freshness and repository-boundary validation.
 - `idle_timeout`: the Session paused after inactivity; the original Thread and ACP session can be resumed.
 - `failed`: environment or runtime error; fix the issue and resume.
-- `stopped`: stopped by the initiator or terminal; resumable.
+- `stopped`: stopped from the terminal; resumable.
 
 State and logs live under `~/.local/state/im-align/`.
 
@@ -99,9 +106,9 @@ State and logs live under `~/.local/state/im-align/`.
 
 - Work only inside the current git worktree at launch time; repository URLs are not accepted and repositories are not cloned.
 - ACP file reads and writes are confined to the current repository, including real paths after symlink resolution.
-- The default is `permission: callback`; write operations require Feishu/Lark card approval, and only the Session Initiator can approve them.
+- The Bridge applies a deterministic Permission Policy: read-only operations and edits inside `agent.spec_root` may proceed; other restricted operations are rejected without human interaction.
 - Startup is rejected when the Agent Backend argv contains dangerous parameters such as `bypass_permissions`, `--yolo`, `trust-all-tools`, or `trust-tools`.
-- The target repository must still configure the backend's own ask rules, such as `opencode.json`; otherwise the backend will not send approval requests. kiro-cli asks by default, and its no-approval allowlist comes from `allowedTools` in host-level `~/.kiro/agents/*.json`. kimi is governed by `permission` in host-level `~/.kimi-code/config.toml`; by default it allows file writes without approval in 0.42.0 tests.
+- The target repository must still configure the backend's own ask rules, such as `opencode.json`; otherwise the backend will not send permission requests. kiro-cli asks by default in measured versions, and its allowlist comes from `allowedTools` in host-level `~/.kiro/agents/*.json`. kimi is governed by `permission` in host-level `~/.kimi-code/config.toml`; its 0.42.0 default allows file writes without asking.
 - Multiple WebSocket connections for the same Feishu/Lark app receive events by random distribution, so v1 uses a machine-level single-session lock.
 
 ## Directory Map

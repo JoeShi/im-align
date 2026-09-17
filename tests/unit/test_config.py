@@ -36,6 +36,24 @@ def write_yaml(path, data, mode=None):
 
 
 class ConfigLoadTests(unittest.TestCase):
+    def test_bridge_config_home_overrides_xdg_without_changing_backend_home(self):
+        with tempfile.TemporaryDirectory() as bridge_home, tempfile.TemporaryDirectory() as xdg_home:
+            old_bridge = os.environ.get("IM_ALIGN_CONFIG_HOME")
+            old_xdg = os.environ.get("XDG_CONFIG_HOME")
+            os.environ["IM_ALIGN_CONFIG_HOME"] = bridge_home
+            os.environ["XDG_CONFIG_HOME"] = xdg_home
+            try:
+                self.assertEqual(config.user_config_dir(), os.path.join(bridge_home, "im-align"))
+            finally:
+                if old_bridge is None:
+                    os.environ.pop("IM_ALIGN_CONFIG_HOME", None)
+                else:
+                    os.environ["IM_ALIGN_CONFIG_HOME"] = old_bridge
+                if old_xdg is None:
+                    os.environ.pop("XDG_CONFIG_HOME", None)
+                else:
+                    os.environ["XDG_CONFIG_HOME"] = old_xdg
+
     def write_user_config(self, data, mode=0o600):
         path = Path(config.user_config_path())
         write_yaml(path, data, mode)
@@ -65,10 +83,7 @@ class ConfigLoadTests(unittest.TestCase):
                 self.user_config(
                     {
                         "agent": {"backend": "opencode", "skill": "user-skill"},
-                        "timeouts": {
-                            "approval_timeout_seconds": 800,
-                        },
-                        "approval": {"mode": "callback"},
+                        "timeouts": {"turn_timeout_seconds": 800},
                     }
                 )
             )
@@ -89,13 +104,17 @@ class ConfigLoadTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(loaded["im"], {"provider": "feishu", "type": "feishu", "chat_id": "oc_repo"})
+            self.assertEqual(
+                loaded["im"],
+                {"provider": "feishu", "type": "feishu", "chat_id": "oc_repo", "extra_participant_open_ids": []},
+            )
             self.assertEqual(
                 loaded["agent"],
                 {
                     "backend": "opencode",
                     "model": "repo-model",
                     "skill": "cli-skill",
+                    "spec_root": "docs/specs",
                     "command_alias": "",
                     "command": "",
                     "args": [],
@@ -104,16 +123,13 @@ class ConfigLoadTests(unittest.TestCase):
             self.assertEqual(
                 loaded["timeouts"],
                 {
-                    "approval_timeout_seconds": 800,
                     "turn_timeout_seconds": 901,
                     "idle_timeout_seconds": 3600,
                 },
             )
-            self.assertEqual(loaded["approval"], {"mode": "callback"})
             self.assertNotIn("chat_id", loaded)
             self.assertNotIn("skill", loaded)
             self.assertNotIn("turn_timeout_seconds", loaded)
-            self.assertNotIn("permission", loaded)
 
     def test_built_in_defaults_are_exposed_as_grouped_sections(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -121,12 +137,32 @@ class ConfigLoadTests(unittest.TestCase):
 
             loaded = config.load(cwd, {"chat_id": "oc_cli"})
 
-            self.assertEqual(loaded["im"], {"provider": "feishu", "type": "feishu", "chat_id": "oc_cli"})
+            self.assertEqual(
+                loaded["im"],
+                {"provider": "feishu", "type": "feishu", "chat_id": "oc_cli", "extra_participant_open_ids": []},
+            )
             self.assertEqual(loaded["agent"]["backend"], "opencode")
             self.assertEqual(loaded["agent"]["skill"], "grill-with-docs")
             self.assertNotIn("debounce_seconds", loaded["timeouts"])
-            self.assertEqual(loaded["approval"], {"mode": "callback"})
             self.assertEqual(loaded["feishu_domain"], "feishu")
+
+    def test_legacy_repository_initiator_is_ignored(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config())
+            self.write_repo_config(
+                cwd,
+                {
+                    "initiator": {
+                        "email": "old@example.com",
+                        "open_id": "ou_old",
+                        "name": "Old Initiator",
+                    }
+                },
+            )
+
+            loaded = config.load(cwd)
+
+            self.assertNotIn("initiator", loaded)
 
     def test_named_lark_provider_can_be_selected_by_key(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -146,7 +182,10 @@ class ConfigLoadTests(unittest.TestCase):
 
             loaded = config.load(cwd)
 
-            self.assertEqual(loaded["im"], {"provider": "intl", "type": "lark", "chat_id": "oc_lark"})
+            self.assertEqual(
+                loaded["im"],
+                {"provider": "intl", "type": "lark", "chat_id": "oc_lark", "extra_participant_open_ids": []},
+            )
             self.assertEqual(loaded["feishu_app_id"], "cli_lark")
             self.assertEqual(loaded["feishu_domain"], "larksuite")
 
@@ -242,6 +281,10 @@ class ConfigLoadTests(unittest.TestCase):
 
         self.assertEqual(bridge._overrides(args)["provider"], "intl")
 
+    def test_start_parser_rejects_removed_initiator_option(self):
+        with self.assertRaises(SystemExit):
+            bridge.build_parser().parse_args(["start", "topic", "--initiator", "ou_test"])
+
     def test_setup_writes_grouped_defaults_and_drops_legacy_root_keys(self):
         with isolated_config_home():
             self.write_user_config(
@@ -269,7 +312,7 @@ class ConfigLoadTests(unittest.TestCase):
             )
 
             with (
-                mock.patch("builtins.input", side_effect=["", "", "", "", "", ""]),
+                mock.patch("builtins.input", side_effect=["", "", "", "", ""]),
                 mock.patch("getpass.getpass", return_value=""),
                 redirect_stdout(io.StringIO()),
             ):
@@ -281,7 +324,7 @@ class ConfigLoadTests(unittest.TestCase):
                 written["defaults"],
                 {
                     "im": {"provider": "feishu"},
-                    "agent": {"backend": "opencode"},
+                    "agent": {"backend": "opencode", "spec_root": "docs/specs"},
                 },
             )
             self.assertEqual(
@@ -307,7 +350,7 @@ class ConfigLoadTests(unittest.TestCase):
     def test_setup_can_create_custom_provider_key(self):
         with isolated_config_home():
             with (
-                mock.patch("builtins.input", side_effect=["work", "cli_work", "feishu", "oc_work", "opencode", ""]),
+                mock.patch("builtins.input", side_effect=["work", "cli_work", "feishu", "oc_work", "opencode"]),
                 mock.patch("getpass.getpass", return_value="secret"),
                 redirect_stdout(io.StringIO()),
             ):
@@ -327,7 +370,7 @@ class ConfigLoadTests(unittest.TestCase):
                     },
                     "defaults": {
                         "im": {"provider": "work"},
-                        "agent": {"backend": "opencode"},
+                        "agent": {"backend": "opencode", "spec_root": "docs/specs"},
                     },
                 },
             )
@@ -429,7 +472,6 @@ class ConfigLoadTests(unittest.TestCase):
                     self.assertEqual(loaded["im"]["type"], provider_type)
                     self.assertEqual(loaded["feishu_domain"], expected_domain_key)
                     self.assertEqual(provider._app_id, f"cli_{provider_type}")
-                    self.assertIn(provider_type, config.PROVIDER_CALLBACK_APPROVAL_TYPES)
 
     def test_provider_type_and_credentials_are_required(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -472,79 +514,6 @@ class ConfigLoadTests(unittest.TestCase):
 
             with self.assertRaisesRegex(config.ConfigError, "chat_id"):
                 config.load(cwd)
-
-    def test_repository_callback_approval_is_allowed(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config())
-            self.write_repo_config(cwd, {"approval": {"mode": "callback"}})
-
-            loaded = config.load(cwd)
-
-            self.assertEqual(loaded["approval"], {"mode": "callback"})
-
-    def test_repository_auto_allow_approval_is_rejected(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config())
-            self.write_repo_config(cwd, {"approval": {"mode": "auto_allow"}})
-
-            with self.assertRaisesRegex(config.ConfigError, "approval.mode.*auto_allow"):
-                config.load(cwd)
-
-    def test_user_auto_allow_approval_is_allowed(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(
-                self.user_config(
-                    {
-                        "approval": {"mode": "auto_allow"},
-                    }
-                )
-            )
-
-            loaded = config.load(cwd)
-
-            self.assertEqual(loaded["approval"], {"mode": "auto_allow"})
-
-    def test_cli_auto_allow_requires_acknowledgement(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config())
-
-            with self.assertRaisesRegex(config.ConfigError, "acknowledge-auto-allow"):
-                config.load(cwd, {"approval": {"mode": "auto_allow"}})
-
-            loaded = config.load(cwd, {"approval": {"mode": "auto_allow"}, "acknowledge_auto_allow": True})
-            self.assertEqual(loaded["approval"], {"mode": "auto_allow"})
-
-    def test_start_parser_forwards_approval_override_acknowledgement(self):
-        args = bridge.build_parser().parse_args(
-            ["start", "topic", "--approval", "auto_allow", "--acknowledge-auto-allow"]
-        )
-
-        overrides = bridge._overrides(args)
-
-        self.assertEqual(overrides["permission"], "auto_allow")
-        self.assertTrue(overrides["acknowledge_auto_allow"])
-
-    def test_callback_approval_fails_for_callback_unsupported_provider(self):
-        # Every type in PROVIDER_TYPE_DOMAINS currently supports callbacks, so
-        # the guard is unreachable through load(); register a hypothetical
-        # future type to exercise the startup failure path.
-        cfg = dict(config.DEFAULTS)
-        cfg.update(
-            {
-                "provider": "work",
-                "provider_type": "wecom",
-                "permission": "callback",
-                "feishu_app_id": "cli_work",
-                "feishu_app_secret": "secret",
-                "feishu_domain": "feishu",
-                "chat_id": "oc_work",
-                "command": "",
-            }
-        )
-
-        with mock.patch.dict(config.PROVIDER_TYPE_DOMAINS, {"wecom": "feishu"}):
-            with self.assertRaisesRegex(config.ConfigError, "does not support callback Approval"):
-                config.validate(cfg)
 
     def test_cli_provider_override_missing_key_fails(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -682,13 +651,14 @@ class ConfigLoadTests(unittest.TestCase):
             "backend": "kiro-cli",
             "model": "",
             "command_alias": "",
-            "permission": "auto_allow",
+            "spec_root": "docs/specs",
         }
 
         overrides = bridge._record_overrides(record)
 
         self.assertEqual(overrides["command_alias"], "")
-        self.assertTrue(overrides["acknowledge_auto_allow"])
+        self.assertEqual(overrides["spec_root"], "docs/specs")
+        self.assertNotIn("permission", overrides)
 
     def test_prepare_record_saves_resolved_command_alias(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -714,19 +684,12 @@ class ConfigLoadTests(unittest.TestCase):
                 backend="kiro-cli",
                 model=None,
                 command_alias="",
-                approval="auto_allow",
-                acknowledge_auto_allow=True,
-                initiator="ou_test",
             )
             old_cwd = os.getcwd()
             os.chdir(cwd)
             try:
-                with mock.patch.object(bridge.identity, "ensure_git_repo"), mock.patch(
+                with mock.patch.object(bridge.workspace, "ensure_git_repo"), mock.patch(
                     "shutil.which", return_value="/usr/bin/kiro-cli"
-                ), mock.patch.object(
-                    bridge.identity,
-                    "resolve_claim",
-                    return_value={"open_id": "ou_test", "email": "", "name": "Tester"},
                 ):
                     record = bridge._prepare_record(args)
             finally:
@@ -734,10 +697,12 @@ class ConfigLoadTests(unittest.TestCase):
 
         self.assertEqual(record["backend"], "kiro-cli")
         self.assertEqual(record["command_alias"], "")
+        self.assertEqual(record["spec_root"], "docs/specs")
         self.assertEqual(
             record["agent_argv"],
             ["kiro-cli", "acp", "--agent-engine", "v3", "--auth-method", "cli"],
         )
+        self.assertFalse(any(key.startswith("initiator_") for key in record))
 
     def test_missing_command_alias_fails(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
@@ -811,6 +776,7 @@ class ConfigLoadTests(unittest.TestCase):
             ({"command": "opencode"}, "command"),
             ({"args": ["acp"]}, "args"),
             ({"permission": "callback"}, "permission"),
+            ({"approval": {"mode": "callback"}}, "approval"),
             ({"app_id": "cli_repo"}, "app_id"),
             ({"app_secret": "secret"}, "app_secret"),
             ({"providers": {}}, "providers"),
@@ -860,6 +826,107 @@ class ConfigLoadTests(unittest.TestCase):
 
             with self.assertRaisesRegex(config.ConfigError, "must have mode 0600"):
                 config.load(cwd)
+
+
+class ExtraParticipantConfigTests(unittest.TestCase):
+    def write_user_config(self, data, mode=0o600):
+        path = Path(config.user_config_path())
+        write_yaml(path, data, mode)
+        return path
+
+    def write_repo_config(self, cwd, data):
+        write_yaml(Path(cwd) / ".im-align.yaml", data)
+
+    def user_config(self, im_defaults=None):
+        return {
+            "providers": {
+                "feishu": {
+                    "type": "feishu",
+                    "app_id": "cli_test",
+                    "app_secret": "secret",
+                    "default_chat_id": "oc_user",
+                }
+            },
+            "defaults": {"im": im_defaults or {}},
+        }
+
+    def test_defaults_to_empty_list(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config())
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"]["extra_participant_open_ids"], [])
+
+    def test_user_defaults_loads_allowlist(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                self.user_config({"extra_participant_open_ids": ["ou_bot1", "ou_bot2"]})
+            )
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"]["extra_participant_open_ids"], ["ou_bot1", "ou_bot2"])
+
+    def test_repo_level_overrides_user_default(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(
+                self.user_config({"extra_participant_open_ids": ["ou_user_bot"]})
+            )
+            self.write_repo_config(
+                cwd, {"im": {"extra_participant_open_ids": ["ou_repo_bot"]}}
+            )
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["im"]["extra_participant_open_ids"], ["ou_repo_bot"])
+
+    def test_non_list_rejected(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"extra_participant_open_ids": "ou_bot"}))
+
+            with self.assertRaisesRegex(config.ConfigError, "array of strings"):
+                config.load(cwd)
+
+    def test_non_string_entry_rejected(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"extra_participant_open_ids": [123]}))
+
+            with self.assertRaisesRegex(config.ConfigError, "array of strings"):
+                config.load(cwd)
+
+    def test_entry_without_ou_prefix_rejected(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"extra_participant_open_ids": ["on_bot"]}))
+
+            with self.assertRaisesRegex(config.ConfigError, "ou_"):
+                config.load(cwd)
+
+    def test_empty_string_entry_rejected(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            self.write_user_config(self.user_config({"extra_participant_open_ids": [""]}))
+
+            with self.assertRaisesRegex(config.ConfigError, "ou_"):
+                config.load(cwd)
+
+    def test_validate_returns_fresh_list(self):
+        cfg = dict(config.DEFAULTS)
+        cfg.update(
+            {
+                "provider": "feishu",
+                "provider_type": "feishu",
+                "feishu_app_id": "cli_test",
+                "feishu_app_secret": "secret",
+                "feishu_domain": "feishu",
+                "chat_id": "oc_test",
+            }
+        )
+        cfg["extra_participant_open_ids"] = ["ou_bot"]
+
+        config.validate(cfg)
+        cfg["extra_participant_open_ids"].append("ou_mutated")
+
+        self.assertEqual(config.DEFAULTS["extra_participant_open_ids"], [])
 
 
 if __name__ == "__main__":

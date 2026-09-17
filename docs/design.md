@@ -37,24 +37,17 @@ The minimal JSON-RPC client implements only the protocol surface currently neede
 
 kiro-cli uses the v3 engine (`kiro-cli acp --agent-engine v3 --auth-method cli`, ADR-0003): v2 is the legacy engine and will be removed, and in v3 the Agent actively reads Skill files through fs capability, while v2 relies on Skill tools absent from the ACP Session. `--auth-method cli` keeps authentication inside the subprocess; otherwise v3 expects the client to implement `_kiro/auth/getAccessToken` and hangs when it is missing. These constraints were measured on 2.21.4. kiro `[INFO]` logs go to stderr and do not pollute stdio. `_kiro.dev/` extension notifications such as metadata and tool_call_chunk previews are ignored as unknown methods. v3 exits slowly, so close uses terminate then kill as a backstop.
 
-kimi uses its native ACP server (`kimi acp`, ADR-0003): it works directly on logged-in hosts; when logged out, initialize returns terminal authMethods and the user must run `kimi acp --login` first. At Session startup it probes `.kimi-code/AGENTS.md`, `AGENTS.md`, and `agents.md` through fs capability; missing-file errors are acceptable and do not affect later work. initialize returns no configOptions, so ACP cannot switch models per Session. With the host default permission, file writes do not trigger Approval; Approval behavior is controlled by `permission` in host-level `~/.kimi-code/config.toml`. This was measured on 0.42.0.
+kimi uses its native ACP server (`kimi acp`, ADR-0003): it works directly on logged-in hosts; when logged out, initialize returns terminal authMethods and the user must run `kimi acp --login` first. At Session startup it probes `.kimi-code/AGENTS.md`, `AGENTS.md`, and `agents.md` through fs capability; missing-file errors are acceptable and do not affect later work. initialize returns no configOptions, so ACP cannot switch models per Session. With the 0.42.0 host default, file writes do not emit `session/request_permission`; production and CI hosts must configure ask mode for the Bridge Permission Policy to cover native tool calls.
 
 Even when fs requests carry absolute paths, the client resolves real paths and confines them to the Session cwd. The Bridge does not declare terminal capability.
 
 ### IM Provider
 
-v1 supports Feishu/Lark only. The Provider abstraction keeps future Slack/DingTalk surfaces open: event polling, text/card send and receive, reactions, contacts, and Approval handles. Events and card callbacks both use long connections, so no public ingress is required.
+v1 supports Feishu/Lark only. The Provider abstraction keeps future Slack/DingTalk surfaces open: event polling, text/card send, reactions, and contacts. Message events use a long connection, so no public ingress is required.
 
-## Startup And Identity
+## Startup And Lifecycle Control
 
-`start` must run inside a git worktree and does not accept repository aliases or URLs. Identity resolution order:
-
-1. `initiator` configured in repository `.im-align.yaml`.
-2. Optional `lark-cli whoami --as user` using the same Feishu/Lark app as the Bridge.
-3. `git config user.email` in the current repository.
-4. Interactive email prompt.
-
-Feishu/Lark open_id values are app-scoped. If lark-cli uses another app, its open_id must be discarded and the flow must fall back to email, then resolve through the Bridge app contact API. Resolution requires `contact:user.id:readonly`. If resolution fails, startup fails. Approval cards and stop operations hard-check the open_id under the Bridge app; the root message displays the initiator name for group visibility.
+`start` must run inside a git worktree and does not accept repository aliases or URLs. Startup does not resolve or bind a Feishu/Lark user identity. Any delivered Thread participant message may drive an Alignment Turn. Thread text cannot stop a Session; lifecycle control belongs to the local `bridge.py stop` command (ADR-0007).
 
 ## Session And Thread
 
@@ -69,18 +62,16 @@ Thread replies immediately receive a best-effort emoji ack. Each reply is format
 
 Only replies in the root Thread enter the Session. Because of group mention-message scope limits, participants currently must mention the bot when replying in the Thread.
 
-## Approval And Timeouts
+## Permission Policy And Timeouts
 
-Default `permission: callback`:
+`session/request_permission` is answered immediately and without human interaction. The Bridge matches `options[].kind`, never backend-specific `optionId` values:
 
-- `session/request_permission` becomes an interactive card in the Thread.
-- Allow/reject semantics are mapped by `options[].kind`; `optionId` is not interpreted.
-- Only the Session Initiator's click is effective.
-- Approval timeout returns cancelled.
-- The Turn watchdog is paused while waiting for Approval.
-- Failed tool updates are used to supplement an "operation rejected" explanation. kiro-cli also emits explanatory text after rejection, so this is a backstop; a failed update under kiro is not always an Approval rejection, such as a Skill registry miss, so text follows the extracted reason.
+- `read`, `search`, `fetch`, and `think` are allowed once.
+- `edit` is allowed once only when every extracted target resolves to a file under `agent.spec_root`.
+- execution, deletion, movement, unknown kinds, missing targets, paths outside the repository, and symlink escapes are rejected.
+- If the requested `allow_once` option is absent, the request is rejected instead of widening the grant.
 
-`auto_allow` is used only when explicitly configured by the user. The target repository must still enable the backend's ask permissions; otherwise the backend will not send permission requests at all.
+The Turn watchdog has one fixed deadline and never pauses. Failed tool updates supplement an "operation rejected" explanation because some backends end a Turn silently after rejection. The target host must enable backend ask permissions; a backend that performs native writes without emitting `session/request_permission` cannot be constrained by the Bridge policy. CI therefore runs real backends in isolated worktrees and asserts that git changes remain inside the Spec Root.
 
 ## Completion Detection
 
@@ -105,7 +96,7 @@ State directory:
 
 State machine: `starting -> active -> done|failed|idle_timeout|stopped`.
 
-- `wait` polls state with a bound and does not treat human-readable logs as protocol.
+- `wait` polls state with a bound. The host Agent has no push channel into the background worker, so one `wait` call blocks inside the CLI process until a terminal state or the timeout instead of burning host turns on a polling loop. The bound caps one tool invocation; on timeout the host Agent decides whether to re-wait or hand control back to the developer. It does not treat human-readable logs as protocol.
 - `resume` accepts only failed/idle_timeout/stopped, reuses the original Thread, backend, and ACP session, then calls `session/load`.
 - `stop` sends SIGTERM to the worker; the worker cleans up and writes stopped.
 - If a process exits abnormally and leaves a non-terminal record, the next startup marks it failed.

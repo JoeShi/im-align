@@ -5,6 +5,11 @@ __pycache__/
 .pytest_cache/
 .coverage
 
+# Local e2e credentials (copy .env.example to .env; never commit real values)
+.env
+.env.*
+!.env.example
+
 # Local sensitive configuration from the legacy Go implementation
 im-align.yaml
 im-align.db
@@ -12,3 +17,4 @@ im-align.db
 # Installed agent skills (restore from skills-lock.json with your skills installer)
 .agents/skills/
 .claude/skills/
+.e2e/skills/

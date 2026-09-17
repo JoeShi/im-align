@@ -21,7 +21,7 @@ The independent long-lived process started by the im-align Skill. One side recei
 _Avoid_: bot, server, daemon service
 
 **Session**:
-One complete Alignment run. It binds the git worktree active at launch time, one Alignment Skill, one Thread, and one Agent Backend session, all carried by one Bridge process.
+One complete Alignment run. It binds the git worktree and Spec Root resolved at launch time, one Alignment Skill, one Thread, and one Agent Backend session, all carried by one Bridge process.
 _Avoid_: conversation, chat, task
 
 **Thread**:
@@ -37,13 +37,43 @@ The Coding Agent driven by the Bridge through ACP. Current backends are opencode
 _Avoid_: Agent, model, Provider
 
 **Spec**:
-The document written by the Agent Backend to the current repository after Alignment completes. It is the only terminal artifact of a Session. It remains a local file only; im-align does not create branches or commits. Path and format are decided by the Agent Backend and the Alignment Skill.
+One or more files written by the Agent Backend under the Spec Root after Alignment completes. They are the only terminal artifacts of a Session. They remain local files only; im-align does not create branches or commits. Filenames, subdirectories, formats, and file count are decided by the Agent Backend and the Alignment Skill.
 _Avoid_: requirements doc, design doc, PRD
 
-**Approval**:
-An allow or reject decision made by the Session Initiator through an interactive card when the Agent Backend requests a restricted operation.
-_Avoid_: authorization, confirmation, permission
+**Spec Root**:
+The repository-relative directory where a Session may write Spec files. Writes outside it are not allowed during Alignment.
+_Avoid_: output directory, writable workspace
 
-**Session Initiator**:
-The user who starts the Session. Their Feishu/Lark identity is resolved at launch time. Only this user can approve write operations or stop the Session.
-_Avoid_: asker, owner, admin
+**Permission Policy**:
+The deterministic Bridge rule applied when an Agent Backend requests a restricted operation. Read-only work is allowed, edits are allowed only when every resolved target is inside the Spec Root, and all other restricted operations are rejected.
+_Avoid_: Approval, authorization, confirmation
+
+## Verification
+
+**Unit Test**:
+The deterministic base layer: stdlib unittest with faked boundaries and no network. Guards config, watchdog, and ACP client invariants.
+_Avoid_: component test
+
+**IM Integration**:
+The Bridge-to-IM layer: a real Feishu Thread against a scripted multi-Turn fake Agent Backend over real ACP stdio. A fixed user-originated Participant reply must be acknowledged and drive the next Turn; it also asserts IM operations and on-disk artifacts. Trusted-main gate, run serially; pull requests run only the hermetic Unit Test layer.
+_Avoid_: contract test, IM mock test
+
+**Backend Smoke**:
+The single-scenario layer: one real Agent Backend plus an LLM-driven User Simulator in one Participant Mode on a real Thread. Asserts the core Alignment workflow end to end with deterministic expectations.
+_Avoid_: sanity check, canary
+
+**Full e2e**:
+The exhaustive layer: every supported Agent Backend in the supported `as-user` Participant Mode across all Scenarios, greenfield and brownfield, with the same schema as Backend Smoke. The blocked `bot` mode remains an optional platform diagnostic. Run on demand, not in CI.
+_Avoid_: regression suite, UAT
+
+**Scenario**:
+One declarative test case: a directory declaring the Agent Backend, seed repository, requirement prompt, expected artifacts, and rubric dimensions. Shared by IM Integration, Backend Smoke, and Full e2e.
+_Avoid_: test case file, fixture
+
+**User Simulator**:
+The harness component that plays the customer in Backend Smoke and Full e2e: it reads the Thread, answers the Agent's questions within the Scenario's brief, and never introduces requirements of its own.
+_Avoid_: fake user, mock user, judge
+
+**Participant Mode**:
+The identity used by the User Simulator for one Backend Smoke or Full e2e run. `as-user` is the supported mode. `bot` remains selectable only to re-probe the platform delivery constraint recorded by ADR-0009; it is expected to fail acknowledgement and Turn-driving assertions until re-enabled.
+_Avoid_: simulator identity, auth mode

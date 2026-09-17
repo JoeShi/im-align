@@ -3,7 +3,7 @@
 Behavior matches the interaction model from legacy/go/internal/lark/bot.go:
   - root message opens the Session; Thread replies get emoji ack + queued Turn;
   - Turn start sends a blue thinking card, and Turn end patches it with output;
-  - completion signal is strictly validated in completion.py; Approval uses Provider card callbacks;
+  - completion signal is strictly validated in completion.py;
   - idle timeout closes the run, and terminal state feeds host Agent resume handoff.
 """
 
@@ -13,24 +13,25 @@ import time
 from datetime import datetime
 
 from . import cards, state
-from .acp.client import PermissionDecision
 from .completion import parse_completion
 from .textutil import chunk_runes
 
 log = logging.getLogger("im_align.orchestrator")
 
-COMPLETION_HINT = """
+def completion_hint(spec_root):
+    """Build the completion contract from the resolved Session configuration."""
+    return f"""
 
 [SYSTEM CONTRACT] When you decide Alignment is complete, finish with these exact steps:
-1. Write the Spec into the current repository; choose the repository-relative path and format, for example SPEC.md, and confirm the file was actually written.
-2. On the final line of your reply, output exactly one standalone line: [ALIGNMENT_COMPLETE] <repository-relative path of that file>
-3. Do not include [ALIGNMENT_COMPLETE] anywhere else in the reply, including backtick references, code blocks, or narrative mentions.
-4. Historical Spec files may already exist in the repository, such as SPEC.md or specs/. They are outputs from previous Alignment Sessions and are unrelated to this Session. Do not treat their existence as completion. This Session's Spec must be actually written or updated by you during this Session."""
+1. Write all Spec files under `{spec_root}/`.
+2. You may choose filenames, subdirectories, formats, and file count. Do not write outside `{spec_root}/`.
+3. On the final line of your reply, output exactly one standalone line naming the primary Spec file: [ALIGNMENT_COMPLETE] <repository-relative path under {spec_root}/>
+4. Do not include [ALIGNMENT_COMPLETE] anywhere else in the reply, including backtick references, code blocks, or narrative mentions.
+5. Historical Spec files may already exist under the Spec Root. They are outputs from previous Alignment Sessions and are unrelated to this Session. Do not treat their existence as completion. This Session's Spec must include at least one file actually written or updated by you during this Session."""
 
 ROOT_TEMPLATE = (
     "📋 New Alignment Session\n"
     "skill: {skill}\n"
-    "initiator: {initiator}\n"
     "topic: {topic}\n\n"
     "Reply to this message in the Thread to participate in Alignment.\n"
     "💡 Please **mention me** when replying in this Thread; otherwise I cannot receive your message because of Feishu/Lark scope limits."
@@ -40,7 +41,7 @@ USAGE_TEXT = (
     "This group is handled by im-align Bridge.\n"
     "• A developer starts a Session from the terminal through the im-align Skill.\n"
     "• Reply in the Session Thread and mention me to participate in Alignment.\n"
-    "• Mention me with `stop` in the Session Thread to end the Session; initiator only."
+    "• The developer can stop the Session from the terminal."
 )
 
 
@@ -77,69 +78,6 @@ class Orchestrator:
             except Exception:
                 log.exception("failed to cancel current Turn")
 
-    # ---- Approval callback, called by the ACP thread ----
-
-    def on_permission(self, req):
-        approval_id = self.provider.next_approval_id()
-        handle = self.provider.register_approval(
-            approval_id, self.record["initiator_open_id"]
-        )
-        card = cards.approval_card(
-            approval_id, req, self.cfg["timeouts"]["approval_timeout_seconds"]
-        )
-        try:
-            card_message_id = self.provider.reply_card(self.record["root_message_id"], card)
-        except Exception as e:
-            log.warning("failed to send Approval card: %s; auto-cancelling", e)
-            self.provider.cancel_approval(approval_id)
-            return PermissionDecision("cancel")
-        log.info("Approval card sent req=%s title=%r", approval_id, req.title)
-
-        ok = handle.event.wait(timeout=self.cfg["timeouts"]["approval_timeout_seconds"] - 5)
-        self.provider.cancel_approval(approval_id)
-        if not ok:
-            self.provider.reply_card(
-                self.record["root_message_id"],
-                cards.simple_card(
-                    "grey",
-                    "⏰ Approval Timeout",
-                    f"Approval request {req.title!r} timed out and the operation was cancelled.",
-                ),
-            )
-            return PermissionDecision("cancel")
-
-        # Patch the Approval card and leave an audit record in the Thread.
-        verb = {
-            "allow_once": "✅ Approved for this time",
-            "allow_always": "✅ Approved for this Session without asking again",
-            "reject_once": "🚫 Rejected for this time",
-            "reject_always": "🚫 Rejected always",
-        }.get(handle.kind, "Processed: " + handle.kind)
-        if handle.message_id or card_message_id:
-            try:
-                self.provider.patch_card(
-                    handle.message_id or card_message_id,
-                    cards.simple_card(
-                        "grey",
-                        "Approval Processed",
-                        f"**Operation**: {req.title}\n**Decision**: {verb}",
-                    ),
-                )
-            except Exception as e:
-                log.warning("failed to update Approval card: %s", e)
-        try:
-            self.provider.reply_card(
-                self.record["root_message_id"],
-                cards.simple_card(
-                    "grey",
-                    "Approval Record",
-                    f"**Operation**: {req.title}\n**Decision**: {verb}",
-                ),
-            )
-        except Exception as e:
-            log.warning("failed to send Approval record: %s", e)
-        return PermissionDecision(handle.kind)
-
     # ---- Main loop ----
 
     def run(self):
@@ -168,16 +106,6 @@ class Orchestrator:
 
     def _handle_event(self, ev):
         if ev.root_id and ev.root_id == self.record["root_message_id"]:
-            tokens = ev.text.split()
-            if tokens and tokens[0] == "stop":
-                if ev.sender_open_id != self.record["initiator_open_id"]:
-                    self.provider.reply_card(
-                        ev.root_id,
-                        cards.simple_card("orange", "Not Authorized", "Only the Session Initiator can stop the Session."),
-                    )
-                    return
-                self.request_stop()
-                return
             if not ev.text:
                 return
             if self.record["state"] != state.STATE_ACTIVE:
@@ -251,13 +179,8 @@ class Orchestrator:
         """Send root message and first `/<skill> <topic>` Turn after ACP is ready."""
         self.record["acp_session_id"] = session_id
         self.record["client"] = client
-        initiator = self.record.get("initiator_name") or self.provider.user_name(
-            self.record["initiator_open_id"]
-        )
-        self.record["initiator_name"] = initiator
         root_text = ROOT_TEMPLATE.format(
             skill=self.record["skill"],
-            initiator=initiator,
             topic=self.record["topic"],
         )
         root_id = self.provider.send_text(self.record["chat_id"], root_text)
@@ -273,7 +196,10 @@ class Orchestrator:
         except Exception as e:
             log.warning("failed to send thinking card: %s", e)
 
-        prompt = f"/{self.record['skill']} {self.record['topic']}" + COMPLETION_HINT
+        prompt = (
+            f"/{self.record['skill']} {self.record['topic']}"
+            + completion_hint(self.cfg["agent"]["spec_root"])
+        )
         self._turn_busy.set()
 
         def work():
@@ -323,7 +249,10 @@ class Orchestrator:
             self.record.get("attempt_started_at_ts", self.record["started_at_ts"])
         )
         spec_rel, marker_found, file_valid = parse_completion(
-            text, self.record["cwd"], session_start
+            text,
+            self.record["cwd"],
+            session_start,
+            self.cfg["agent"]["spec_root"],
         )
         if marker_found and file_valid:
             self.record["spec_path"] = spec_rel
@@ -350,7 +279,8 @@ class Orchestrator:
                         "orange",
                         "⚠️ Invalid Completion Signal",
                         f"The Agent declared completion, but Spec file `{spec_rel}` is invalid: "
-                        "it does not exist in the repository, or was not written by this Session "
+                        "it is outside the configured Spec Root, does not exist in the repository, "
+                        "or was not written by this Session "
                         "and may be a historical artifact. The Session continues; ask the Agent "
                         "to write this Session's Spec before declaring completion.",
                     ),

@@ -1,0 +1,22 @@
+# Fixed multi-Turn script for the IM Integration fake backend and Participant.
+# The happy path per ADR-0005 produces zero Approval cards, so no
+# request_permission step appears here. Each end_turn hands control to the
+# corresponding user-originated participant_replies entry.
+participant_replies:
+  - "优先级只需要高、中、低三档，数据存储使用单个 JSON 文件。"
+steps:
+  - type: send_text
+    text: "好的，我来澄清几个关于 TODO list 的问题：优先级排序是否只需要高/中/低三档？数据存储用单个 JSON 文件是否可以？"
+  - type: end_turn
+  - type: send_text
+    text: "明白了。基于以上澄清，我将 Spec 写入 docs/specs/todo-list.md。"
+  - type: write_artifact
+    path: docs/specs/todo.md
+    content: |
+      # TODO List Spec
+
+      - 添加任务、标记完成
+      - 优先级排序：高/中/低三档
+      - 本地存储：单个 JSON 文件
+  - type: emit_marker
+    path: docs/specs/todo.md
