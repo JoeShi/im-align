@@ -24,14 +24,21 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from im_align import cards, config as cfgmod  # noqa: E402
-from im_align import identity, state  # noqa: E402
+from im_align import state, workspace  # noqa: E402
 from im_align.acp.client import AcpClient  # noqa: E402
-from im_align.im_providers.feishu import FeishuProvider  # noqa: E402
 from im_align.orchestrator import Orchestrator  # noqa: E402
+from im_align.permission_policy import PermissionPolicy  # noqa: E402
 
 log = logging.getLogger("im_align.bridge")
 SCRIPT_PATH = str(Path(__file__).resolve())
 SKILL_ROOT = str(Path(__file__).resolve().parent.parent)
+
+
+def _new_feishu_provider(*args, **kwargs):
+    """Load the large generated Feishu SDK only for commands that use it."""
+    from im_align.im_providers.feishu import FeishuProvider
+
+    return FeishuProvider(*args, **kwargs)
 
 
 def build_parser():
@@ -48,9 +55,6 @@ def build_parser():
     s.add_argument("--backend", default=None, choices=["opencode", "trae-cli", "kiro-cli", "kimi"])
     s.add_argument("--model", default=None, help="model identifier; omit to keep the Agent's current selection")
     s.add_argument("--command-alias", default=None, help="configured trusted Agent Backend command alias")
-    s.add_argument("--approval", default=None, choices=[cfgmod.POLICY_CALLBACK, cfgmod.POLICY_AUTO_ALLOW], help="temporary Approval mode override")
-    s.add_argument("--acknowledge-auto-allow", action="store_true", help="confirm the risk of using --approval auto_allow")
-    s.add_argument("--initiator", default=None, help="initiator email or open_id")
     s.add_argument("--foreground", action="store_true", help="run in foreground for debugging")
     s.add_argument("--json", action="store_true", help="emit stable JSON")
 
@@ -85,7 +89,7 @@ def main(argv=None):
     )
     try:
         return globals()[f"cmd_{args.command}"](args)
-    except (cfgmod.ConfigError, identity.IdentityError, RuntimeError, ValueError) as e:
+    except (cfgmod.ConfigError, workspace.WorkspaceError, RuntimeError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
@@ -140,6 +144,7 @@ def cmd_setup(args):
     if not old_type:
         old_type = "lark" if old_provider.get("domain") == "larksuite" else "feishu"
     old_chat_id = old_provider.get("default_chat_id", "")
+    spec_root = old_agent_defaults.get("spec_root", cfgmod.DEFAULTS["spec_root"])
 
     print("Feishu/Lark custom app configuration; see references/feishu-setup.md")
     app_id = _prompt("app_id (cli_...)", old_provider.get("app_id", ""))
@@ -156,7 +161,10 @@ def cmd_setup(args):
         "app_secret": app_secret,
         "default_chat_id": chat_id,
     }
-    defaults = {"im": {"provider": provider_key}, "agent": {"backend": backend}}
+    defaults = {
+        "im": {"provider": provider_key},
+        "agent": {"backend": backend, "spec_root": spec_root},
+    }
     data = {"providers": providers, "defaults": defaults}
     commands = existing.get("commands") or {}
     if commands:
@@ -205,15 +213,6 @@ def cmd_setup(args):
             pass
         raise
 
-    print("Validating credentials...")
-    provider = FeishuProvider(app_id, app_secret, domain)
-    email = input("Use your Feishu/Lark email for a connectivity check; leave blank to skip: ").strip()
-    if email:
-        try:
-            open_id = provider.resolve_open_id(email)
-            print(f"Credentials are valid; resolved open_id: {open_id}")
-        except Exception as e:
-            print(f"Warning: connectivity check failed; configuration was written to {path}: {e}")
     print(f"Done: {path} (mode 0600)")
     return 0
 
@@ -233,8 +232,6 @@ def _overrides(args):
         "backend": getattr(args, "backend", None),
         "model": getattr(args, "model", None),
         "command_alias": getattr(args, "command_alias", None),
-        "permission": getattr(args, "approval", None),
-        "acknowledge_auto_allow": getattr(args, "acknowledge_auto_allow", False),
     }
 
 
@@ -246,14 +243,13 @@ def _record_overrides(record):
         "backend": record["backend"],
         "model": record.get("model", ""),
         "command_alias": record.get("command_alias", ""),
-        "permission": record["permission"],
-        "acknowledge_auto_allow": record["permission"] == cfgmod.POLICY_AUTO_ALLOW,
+        "spec_root": record.get("spec_root"),
     }
 
 
 def _prepare_record(args):
     cwd = os.path.abspath(os.getcwd())
-    identity.ensure_git_repo(cwd)
+    workspace.ensure_git_repo(cwd)
     config = cfgmod.load(cwd, _overrides(args))
     agent = config["agent"]
     argv = cfgmod.backend_argv(
@@ -264,22 +260,6 @@ def _prepare_record(args):
     )
     if not shutil.which(argv[0]):
         raise RuntimeError(f"Agent Backend command {argv[0]!r} was not found; install it or fix configuration")
-
-    claim = identity.resolve_claim(
-        cwd, args.initiator, expected_lark_app_id=config["feishu_app_id"]
-    )
-    provider = FeishuProvider(
-        config["feishu_app_id"], config["feishu_app_secret"], config["feishu_domain"]
-    )
-    if not claim.get("open_id"):
-        if not claim.get("email"):
-            raise identity.IdentityError("initiator has neither email nor open_id")
-        try:
-            claim["open_id"] = provider.resolve_open_id(claim["email"])
-        except Exception as e:
-            raise identity.IdentityError(f"failed to resolve initiator email to Feishu/Lark open_id: {e}") from e
-    if not claim.get("name"):
-        claim["name"] = provider.user_name(claim["open_id"])
 
     now = time.time()
     return {
@@ -292,12 +272,9 @@ def _prepare_record(args):
         "backend": agent["backend"],
         "model": agent.get("model", ""),
         "command_alias": agent.get("command_alias", ""),
+        "spec_root": agent["spec_root"],
         "agent_argv": argv,
-        "permission": config["approval"]["mode"],
         "cwd": cwd,
-        "initiator_email": claim.get("email", ""),
-        "initiator_open_id": claim["open_id"],
-        "initiator_name": claim.get("name", ""),
         "created_at": _now_iso(),
         "started_at_ts": now,
         "attempt_started_at_ts": now,
@@ -427,7 +404,6 @@ def _record_view(record, wait_timed_out=False):
         "backend": backend,
         "model": record.get("model", ""),
         "cwd": record.get("cwd", ""),
-        "initiator": record.get("initiator_name", ""),
         "root_message_id": record.get("root_message_id", ""),
         "acp_session_id": session_id,
         "spec_path": record.get("spec_path", ""),
@@ -523,7 +499,7 @@ def cmd_resume(args):
         )
     if not old.get("acp_session_id") or not old.get("root_message_id"):
         raise RuntimeError("this run has not established an ACP session or Feishu/Lark Thread and cannot be resumed")
-    identity.ensure_git_repo(old["cwd"])
+    workspace.ensure_git_repo(old["cwd"])
     record = dict(old)
     record.update(
         {
@@ -604,18 +580,21 @@ def _execute_record(run_id, resume=None):
             record["pid"] = os.getpid()
             state.save_active(record)
             config = cfgmod.load(record["cwd"], _record_overrides(record))
-            provider = FeishuProvider(
+            provider = _new_feishu_provider(
                 config["feishu_app_id"],
                 config["feishu_app_secret"],
                 config["feishu_domain"],
+                extra_participants=config["im"]["extra_participant_open_ids"],
             )
             orchestrator = Orchestrator(provider, config, record)
-            on_permission = None if config["approval"]["mode"] == cfgmod.POLICY_AUTO_ALLOW else orchestrator.on_permission
+            permission_policy = PermissionPolicy(
+                record["cwd"], config["agent"]["spec_root"]
+            )
             client = AcpClient(
                 record["agent_argv"],
                 record["cwd"],
-                on_permission=on_permission,
-                approval_timeout=timedelta(seconds=config["timeouts"]["approval_timeout_seconds"]),
+                config["agent"]["spec_root"],
+                decide_permission=permission_policy.decide,
                 turn_timeout=timedelta(seconds=config["timeouts"]["turn_timeout_seconds"]),
             )
             client.set_model(record.get("model", ""))

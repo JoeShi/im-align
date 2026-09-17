@@ -14,13 +14,12 @@ maps directly to measured behavior from legacy/go/internal/acp/acp.go
     trigger request_permission under host default permission; asking is decided
     by permission in host ~/.kimi-code/config.toml, like opencode.json.
     initialize returns no configOptions, so ACP cannot switch models per Session.
-  - Permission requests can block a Turn indefinitely, so they need a timeout
-    that returns cancelled. The watchdog may pause while waiting for Approval.
+  - Permission requests are decided immediately by a deterministic policy.
   - After rejection, the Agent may end the Turn silently in opencode tests,
     while kiro-cli emits explanatory text. The client must synthesize an
     "operation rejected" explanation from failed tool_call_update.
-  - Implements fs.readTextFile/writeTextFile capability and does not declare
-    terminal capability.
+  - Implements fs.readTextFile/writeTextFile capability, constraining writes
+    to the configured Spec Root, and does not declare terminal capability.
 
 The handwritten client uses only the standard library. Its protocol surface is
 limited to the bullets above and mirrors the Go implementation for auditing.
@@ -32,7 +31,6 @@ import logging
 import os
 import subprocess
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -102,16 +100,16 @@ class AcpClient:
         self,
         argv,
         cwd,
-        on_permission=None,
+        spec_root,
+        decide_permission=None,
         on_stderr=None,
-        approval_timeout=timedelta(minutes=10),
         turn_timeout=timedelta(minutes=5),
     ):
         self._argv = argv
         self._cwd = cwd
-        self._on_permission = on_permission
+        self._spec_root = spec_root
+        self._decide_permission = decide_permission
         self._on_stderr = on_stderr
-        self._approval_timeout = approval_timeout
         self._turn_timeout = turn_timeout
         self._model = ""
 
@@ -191,7 +189,7 @@ class AcpClient:
         self._closing.set()
         if self._watchdog:
             self._watchdog.stop()
-        # Wake all local pending RPCs so closing does not wait for full Approval timeouts.
+        # Wake all local pending RPCs when the process closes.
         self._fail_pending("ACP client is closed")
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
@@ -233,7 +231,6 @@ class AcpClient:
             self._watchdog = TurnWatchdog(
                 self._turn_timeout,
                 cancel_event.set,
-                absolute_slack=self._approval_timeout,
             )
             try:
                 slot = self._send_request(
@@ -250,7 +247,7 @@ class AcpClient:
                     if cancel_event.is_set():
                         cancelled_by_watchdog = True
                         log.warning(
-                            "Turn timed out; budget %s excludes Approval wait, sending session/cancel",
+                            "Turn timed out after %s; sending session/cancel",
                             self._turn_timeout,
                         )
                         self._notify("session/cancel", {"sessionId": session_id})
@@ -262,7 +259,7 @@ class AcpClient:
                 stop_reason = (slot["result"] or {}).get("stopReason", "")
                 if cancelled_by_watchdog and stop_reason != "cancelled":
                     raise AcpError(
-                        f"Turn timed out; budget {self._turn_timeout} excludes Approval wait"
+                        f"Turn timed out after {self._turn_timeout}"
                     )
                 return self._end_turn(stop_reason)
             finally:
@@ -289,7 +286,8 @@ class AcpClient:
                     continue
                 # Notifications and responses must preserve stdout arrival order;
                 # otherwise prompt response may clear _in_turn before prior chunks.
-                # Only server requests that may block for human Approval go to the pool.
+                # Server requests use the pool so replies can be written without
+                # blocking the stdout reader that receives subsequent frames.
                 if "method" in msg and "id" in msg:
                     self._dispatch.submit(self._on_message, msg)
                 else:
@@ -391,10 +389,6 @@ class AcpClient:
         ]
         if not options:
             return _cancelled_outcome()
-        if self._on_permission is None:
-            # auto_allow prefers allow_always, then allow_once, matching by kind semantics.
-            return _select_by_kinds(options, "allow_always", "allow_once")
-
         tool_call = p.get("toolCall") or {}
         req = PermissionRequest(
             session_id=str(p.get("sessionId", "")),
@@ -405,44 +399,14 @@ class AcpClient:
             options=options,
         )
 
-        done = threading.Event()
-        box = {}
-
-        def run():
-            try:
-                box["decision"] = self._on_permission(req)
-            except Exception as e:
-                log.warning("Approval callback failed: %s", e)
-                box["decision"] = PermissionDecision(CANCEL)
-            finally:
-                done.set()
-
-        # Capture the watchdog once: prompt() reassigns self._watchdog when a
-        # Turn ends, and pause/resume must stay on the instance that was
-        # current when the permission request arrived.
-        watchdog = self._watchdog
-        if watchdog:
-            watchdog.pause()
-        threading.Thread(target=run, daemon=True).start()
-        deadline = time.monotonic() + self._approval_timeout.total_seconds()
-        resolved = False
-        while not self._closing.is_set():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            if done.wait(timeout=min(0.2, remaining)):
-                resolved = True
-                break
-        if watchdog:
-            watchdog.resume()
-
-        if not resolved:
-            if self._closing.is_set():
-                log.info("Approval %r cancelled because ACP client is closing", req.title)
-            else:
-                log.warning("Approval %r timed out after %s; returning cancelled", req.title, self._approval_timeout)
+        if self._decide_permission is None:
+            log.warning("no permission policy configured; rejecting %r", req.title)
             return _cancelled_outcome()
-        decision = box.get("decision") or PermissionDecision(CANCEL)
+        try:
+            decision = self._decide_permission(req)
+        except Exception as e:
+            log.warning("permission policy failed closed: %s", e)
+            decision = PermissionDecision(CANCEL)
         if decision.kind == CANCEL:
             return _cancelled_outcome()
         return _select_by_kinds(options, decision.kind)
@@ -477,6 +441,13 @@ class AcpClient:
 
     def _handle_write_text(self, p):
         path = self._workspace_path(p["path"])
+        root = self._workspace_path(self._spec_root)
+        try:
+            relative = path.relative_to(root)
+        except ValueError as e:
+            raise AcpError(f"refusing write outside Spec Root: {p['path']}") from e
+        if not relative.parts:
+            raise AcpError(f"refusing to replace the Spec Root directory: {p['path']}")
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(p["content"])

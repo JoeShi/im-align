@@ -2,6 +2,7 @@
 
 import os
 import stat
+from pathlib import PurePosixPath
 
 import yaml
 
@@ -9,8 +10,6 @@ BACKEND_OPENCODE = "opencode"
 BACKEND_TRAE_CLI = "trae-cli"
 BACKEND_KIRO_CLI = "kiro-cli"
 BACKEND_KIMI = "kimi"
-POLICY_CALLBACK = "callback"
-POLICY_AUTO_ALLOW = "auto_allow"
 PROVIDER_FEISHU = "feishu"
 PROVIDER_LARK = "lark"
 
@@ -18,13 +17,7 @@ PROVIDER_TYPE_DOMAINS = {
     PROVIDER_FEISHU: "feishu",
     PROVIDER_LARK: "larksuite",
 }
-PROVIDER_CALLBACK_APPROVAL_TYPES = {
-    PROVIDER_FEISHU,
-    PROVIDER_LARK,
-}
-
 TIMEOUT_KEYS = (
-    "approval_timeout_seconds",
     "turn_timeout_seconds",
     "idle_timeout_seconds",
 )
@@ -32,33 +25,32 @@ TIMEOUT_KEYS = (
 DEFAULTS = {
     "provider": "",
     "chat_id": "",
+    "extra_participant_open_ids": [],
     "backend": BACKEND_OPENCODE,
     "model": "",
     "skill": "grill-with-docs",
+    "spec_root": "docs/specs",
     "command_alias": "",
     "command": "",
     "args": [],
-    "approval_timeout_seconds": 600,
     "turn_timeout_seconds": 300,
     "idle_timeout_seconds": 1800,
-    "permission": POLICY_CALLBACK,
 }
 
 GROUPED_SECTION_KEYS = {
     "im": {
         "provider": "provider",
         "chat_id": "chat_id",
+        "extra_participant_open_ids": "extra_participant_open_ids",
     },
     "agent": {
         "backend": "backend",
         "model": "model",
         "skill": "skill",
+        "spec_root": "spec_root",
         "command_alias": "command_alias",
     },
     "timeouts": {key: key for key in TIMEOUT_KEYS},
-    "approval": {
-        "mode": "permission",
-    },
 }
 
 USER_ALLOWED_KEYS = {
@@ -70,10 +62,10 @@ USER_ALLOWED_KEYS = {
 USER_DEFAULT_ALLOWED_SECTIONS = {
     "im": {
         "provider": "provider",
+        "extra_participant_open_ids": "extra_participant_open_ids",
     },
     "agent": GROUPED_SECTION_KEYS["agent"],
     "timeouts": GROUPED_SECTION_KEYS["timeouts"],
-    "approval": GROUPED_SECTION_KEYS["approval"],
 }
 
 REPO_GROUPED_SECTION_KEYS = {
@@ -82,25 +74,23 @@ REPO_GROUPED_SECTION_KEYS = {
         "backend": "backend",
         "model": "model",
         "skill": "skill",
+        "spec_root": "spec_root",
         "command_alias": "command_alias",
     },
     "timeouts": GROUPED_SECTION_KEYS["timeouts"],
-    "approval": GROUPED_SECTION_KEYS["approval"],
 }
 
 REPO_ALLOWED_KEYS = {
-    "initiator",
     "im",
     "agent",
     "timeouts",
-    "approval",
 }
 
 DANGEROUS_ARGV_SUBSTRINGS = (
     "bypass_permissions",
     "--yolo",
     "permission_mode=yolo",
-    # kiro-cli no-approval switches. Short option -a is too broad for substring
+    # kiro-cli permission-bypass switches. Short option -a is too broad for substring
     # blocking, so host-level ~/.kiro/agents/*.json allowedTools remains the backstop.
     "trust-all-tools",
     "trust-tools",
@@ -111,8 +101,49 @@ class ConfigError(Exception):
     pass
 
 
+def normalize_spec_root(value):
+    """Validate and normalize the writable directory from agent.spec_root."""
+    if not isinstance(value, str):
+        raise ConfigError("agent.spec_root must be a string")
+    value = value.strip()
+    if not value:
+        raise ConfigError("agent.spec_root must be a non-empty repository-relative directory")
+    parsed = PurePosixPath(value)
+    if parsed.is_absolute() or ".." in parsed.parts or parsed == PurePosixPath("."):
+        raise ConfigError(
+            "agent.spec_root must be a repository-relative subdirectory without "
+            f"'..' components: {value!r}"
+        )
+    return parsed.as_posix()
+
+
+def _validate_extra_participants(value):
+    """Validate im.extra_participant_open_ids: list of non-empty ou_ strings.
+
+    Empty list (the default) preserves the current behavior where every bot
+    message is discarded (ADR-0006).
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ConfigError("im.extra_participant_open_ids must be an array of strings")
+    bad = [v for v in value if not v.startswith("ou_")]
+    if bad:
+        raise ConfigError(
+            "im.extra_participant_open_ids entries must be non-empty open_id values "
+            f"starting with 'ou_': {bad!r}"
+        )
+    return list(value)
+
+
 def user_config_dir():
-    root = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    # Keep Bridge configuration isolation independent from Agent Backend
+    # configuration. Smoke harnesses may set this without hiding opencode's
+    # model/provider and Skill configuration from its child process.
+    root = os.environ.get(
+        "IM_ALIGN_CONFIG_HOME",
+        os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    )
     return os.path.join(root, "im-align")
 
 
@@ -238,18 +269,11 @@ def _resolve_command_alias(alias, backend, commands):
     return plan["command"], list(plan["args"])
 
 
-def _normalize_grouped_layer(data, source, grouped_sections, legacy_flat_keys=(), allow_initiator=False):
+def _normalize_grouped_layer(data, source, grouped_sections, legacy_flat_keys=()):
     """Accept grouped config while reusing the existing flat validation keys."""
     normalized = {}
     legacy_flat_keys = set(legacy_flat_keys)
     for key, value in data.items():
-        if key == "initiator":
-            if not allow_initiator:
-                raise ConfigError(f"{source} contains unsupported key: initiator")
-            if value is not None and not isinstance(value, dict):
-                raise ConfigError(f"{source}.initiator must be a mapping")
-            normalized[key] = value
-            continue
         if key not in grouped_sections:
             if key not in legacy_flat_keys:
                 raise ConfigError(f"{source} contains unsupported key: {key}")
@@ -285,27 +309,22 @@ def _with_grouped_sections(cfg):
         "feishu_app_secret": cfg["feishu_app_secret"],
         "feishu_domain": cfg["feishu_domain"],
     }
-    if "initiator" in cfg and cfg["initiator"] is not None:
-        if not isinstance(cfg["initiator"], dict):
-            raise ConfigError("initiator must be a mapping")
-        grouped["initiator"] = cfg["initiator"]
     grouped["im"] = {
         "provider": cfg["provider"],
         "type": cfg["provider_type"],
         "chat_id": cfg["chat_id"],
+        "extra_participant_open_ids": list(cfg.get("extra_participant_open_ids") or []),
     }
     grouped["agent"] = {
         "backend": cfg["backend"],
         "model": cfg.get("model", ""),
         "skill": cfg["skill"],
+        "spec_root": cfg["spec_root"],
         "command_alias": cfg.get("command_alias", ""),
         "command": cfg.get("command", ""),
         "args": list(cfg.get("args", [])),
     }
     grouped["timeouts"] = {key: cfg[key] for key in TIMEOUT_KEYS}
-    grouped["approval"] = {
-        "mode": cfg["permission"],
-    }
     return grouped
 
 
@@ -323,8 +342,10 @@ def load(cwd, cli_overrides=None):
     _check_user_config_mode(user_config_path())
     user = _read_yaml(user_config_path())
     repo = _read_yaml(repo_config_path(cwd))
+    # Pre-ADR-0007 repositories may retain this field. It has no runtime
+    # meaning and must not prevent those repositories from starting.
+    repo.pop("initiator", None)
     raw_cli_overrides = dict(cli_overrides or {})
-    acknowledge_auto_allow = bool(raw_cli_overrides.pop("acknowledge_auto_allow", False))
 
     bad_user = set(user) - USER_ALLOWED_KEYS
     if bad_user:
@@ -339,17 +360,13 @@ def load(cwd, cli_overrides=None):
 
     defaults = _read_section(user.get("defaults"))
     defaults = _normalize_grouped_layer(defaults, "defaults", USER_DEFAULT_ALLOWED_SECTIONS)
-    repo = _normalize_grouped_layer(repo, "repository-level .im-align.yaml", REPO_GROUPED_SECTION_KEYS, allow_initiator=True)
-    if repo.get("permission") == POLICY_AUTO_ALLOW:
-        raise ConfigError("repository-level .im-align.yaml approval.mode cannot be auto_allow")
+    repo = _normalize_grouped_layer(repo, "repository-level .im-align.yaml", REPO_GROUPED_SECTION_KEYS)
     cli_overrides = _normalize_grouped_layer(
         raw_cli_overrides,
         "CLI overrides",
         GROUPED_SECTION_KEYS,
         legacy_flat_keys=set(DEFAULTS) - {"args", "command"} | {"command", "args"},
     )
-    if cli_overrides.get("permission") == POLICY_AUTO_ALLOW and not acknowledge_auto_allow:
-        raise ConfigError("CLI approval.mode auto_allow requires --acknowledge-auto-allow")
 
     merged = dict(DEFAULTS)
     merged.update({k: v for k, v in defaults.items() if v is not None})
@@ -377,12 +394,14 @@ def load(cwd, cli_overrides=None):
 
 
 def validate(cfg):
+    cfg["spec_root"] = normalize_spec_root(cfg.get("spec_root"))
+    cfg["extra_participant_open_ids"] = _validate_extra_participants(
+        cfg.get("extra_participant_open_ids")
+    )
     if not isinstance(cfg["provider"], str) or not cfg["provider"]:
         raise ConfigError("im.provider must resolve to a non-empty provider key")
     if cfg["provider_type"] not in PROVIDER_TYPE_DOMAINS:
         raise ConfigError("provider type must be feishu or lark")
-    if cfg["permission"] == POLICY_CALLBACK and cfg["provider_type"] not in PROVIDER_CALLBACK_APPROVAL_TYPES:
-        raise ConfigError(f"provider type {cfg['provider_type']} does not support callback Approval")
     if not cfg["feishu_app_id"] or not cfg["feishu_app_secret"]:
         raise ConfigError(f"missing Feishu/Lark credentials; run `bridge.py setup` first to write {user_config_path()}")
     if cfg["feishu_domain"] not in ("feishu", "larksuite"):
@@ -395,8 +414,6 @@ def validate(cfg):
         raise ConfigError(f"unsupported agent.backend: {cfg['backend']}")
     if not isinstance(cfg["skill"], str) or not cfg["skill"].strip():
         raise ConfigError("skill must be a non-empty string")
-    if cfg["permission"] not in (POLICY_CALLBACK, POLICY_AUTO_ALLOW):
-        raise ConfigError("permission must be callback or auto_allow")
     if cfg.get("command") and not isinstance(cfg["command"], str):
         raise ConfigError("command must be a string")
     if not isinstance(cfg.get("args", []), list) or not all(isinstance(v, str) for v in cfg.get("args", [])):
@@ -429,7 +446,7 @@ def backend_argv(backend, model=None, command=None, args=None):
     elif backend == BACKEND_KIMI:
         # Native kimi-code ACP server, measured on 0.42.0. Logged-in hosts work
         # directly; logged-out initialize returns terminal authMethods and needs
-        # `kimi acp --login` device-code login first. Approval behavior is
+        # `kimi acp --login` device-code login first. Permission requests are
         # controlled by host ~/.kimi-code/config.toml permission, like
         # opencode.json; argv-level --yolo is intercepted here.
         argv = ["kimi", "acp"]
@@ -438,5 +455,5 @@ def backend_argv(backend, model=None, command=None, args=None):
     for token in argv:
         for bad in DANGEROUS_ARGV_SUBSTRINGS:
             if bad in token:
-                raise ConfigError(f"backend argv contains dangerous parameter {bad!r}; refusing startup because Approval is a safety boundary")
+                raise ConfigError(f"backend argv contains dangerous parameter {bad!r}; refusing startup because the permission policy is a safety boundary")
     return argv

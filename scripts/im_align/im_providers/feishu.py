@@ -1,8 +1,7 @@
-"""Feishu/Lark Provider: lark-oapi long-connection IO + Approval card callbacks.
+"""Feishu/Lark Provider: lark-oapi long-connection message IO.
 
 All interactions correspond to legacy/go/internal/lark: long connections
-(WebSocket) receive im.message.receive_v1 and card.action.trigger; cards use
-Card 1.0 JSON; button values carry kind semantics and never match by optionId.
+(WebSocket) receives im.message.receive_v1; cards use Card 1.0 JSON.
 """
 
 import json
@@ -12,11 +11,7 @@ import threading
 import time
 
 import lark_oapi as lark
-from lark_oapi.api.contact.v3 import (
-    BatchGetIdUserRequest,
-    BatchGetIdUserRequestBody,
-    GetUserRequest,
-)
+from lark_oapi.api.contact.v3 import GetUserRequest
 from lark_oapi.api.im.v1 import (
     CreateMessageReactionRequestBody,
     CreateMessageReactionRequest,
@@ -39,23 +34,16 @@ _DOMAINS = {
 }
 
 
-class ApprovalHandle:
-    """One pending Approval waiting for a click."""
-
-    def __init__(self, approval_id, initiator_open_id):
-        self.approval_id = approval_id
-        self.initiator_open_id = initiator_open_id
-        self.event = threading.Event()
-        self.kind = ""
-        self.operator_open_id = ""
-        self.message_id = ""  # Approval card message id, used for in-place updates.
-
-
 class FeishuProvider(Provider):
-    def __init__(self, app_id, app_secret, domain="feishu"):
+    def __init__(self, app_id, app_secret, domain="feishu", extra_participants=()):
         self._app_id = app_id
         self._app_secret = app_secret
         self._domain = _DOMAINS[domain]
+        # ADR-0006: bot messages are discarded by default because group bot
+        # traffic is mostly unrelated chatter. An entry here is an explicitly
+        # configured allowlist (typically a dedicated second CI app playing the
+        # customer); an allowlisted bot drives Turns like a human participant.
+        self._extra_participants = frozenset(extra_participants)
         self.client = (
             lark.Client.builder()
             .app_id(app_id)
@@ -68,9 +56,6 @@ class FeishuProvider(Provider):
         self._names = {}
         self._seen = set()
         self._seen_lock = threading.Lock()
-        self._approvals = {}
-        self._approvals_lock = threading.Lock()
-        self._approval_seq = 0
         self._stopping = threading.Event()
         self._ready = threading.Event()
         self._start_error = None
@@ -81,7 +66,6 @@ class FeishuProvider(Provider):
         handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_message)
-            .register_p2_card_action_trigger(self._on_card_action)
             .build()
         )
         self._ws = lark.ws.Client(
@@ -149,7 +133,9 @@ class FeishuProvider(Provider):
             event_id = getattr(data.header, "event_id", "") if data.header else ""
             if self._dup(event_id):
                 return
-            if getattr(sender, "sender_type", "") == "bot":
+            sender_type = getattr(sender, "sender_type", "")
+            sender_open_id = sender.sender_id.open_id if sender.sender_id else ""
+            if sender_type == "bot" and sender_open_id not in self._extra_participants:
                 return
             text = self._extract_text(msg)
             self._events.put(
@@ -158,8 +144,8 @@ class FeishuProvider(Provider):
                     chat_id=msg.chat_id or "",
                     message_id=msg.message_id or "",
                     root_id=msg.root_id or "",
-                    sender_open_id=(sender.sender_id.open_id if sender.sender_id else ""),
-                    sender_type=getattr(sender, "sender_type", ""),
+                    sender_open_id=sender_open_id,
+                    sender_type=sender_type,
                     text=text,
                 )
             )
@@ -191,57 +177,6 @@ class FeishuProvider(Provider):
             if key:
                 text = text.replace(key, "")
         return text.strip()
-
-    # ---- Card callbacks for Approval ----
-
-    def _on_card_action(self, data):
-        action = data.event.action
-        value = getattr(action, "value", None) or {}
-        if value.get("im_align") != "approval":
-            return P2CardActionTriggerResponse()
-        approval_id = value.get("req_id", "")
-        kind = value.get("kind", "")
-        operator = getattr(data.event.operator, "open_id", "") or ""
-        message_id = getattr(data.event.context, "open_message_id", "") or ""
-        log.info("received Approval callback req=%s kind=%s", approval_id, kind)
-
-        with self._approvals_lock:
-            handle = self._approvals.get(approval_id)
-        if not handle:
-            return self._toast("this Approval was already processed or has timed out")
-        if operator != handle.initiator_open_id:
-            log.warning(
-                "Approval clicker is not the Session Initiator req=%s operator=%s expected=%s",
-                approval_id,
-                operator,
-                handle.initiator_open_id,
-            )
-            return self._toast("only the Session Initiator can approve")
-        if not handle.event.is_set():
-            handle.kind = kind
-            handle.operator_open_id = operator
-            handle.message_id = message_id
-            handle.event.set()
-        return self._toast("recorded")
-
-    @staticmethod
-    def _toast(content):
-        return P2CardActionTriggerResponse({"toast": {"type": "info", "content": content}})
-
-    def register_approval(self, approval_id, initiator_open_id):
-        handle = ApprovalHandle(approval_id, initiator_open_id)
-        with self._approvals_lock:
-            self._approvals[approval_id] = handle
-        return handle
-
-    def cancel_approval(self, approval_id):
-        with self._approvals_lock:
-            self._approvals.pop(approval_id, None)
-
-    def next_approval_id(self):
-        with self._approvals_lock:
-            self._approval_seq += 1
-            return f"perm-{self._approval_seq}"
 
     # ---- Send ----
 
@@ -328,29 +263,3 @@ class FeishuProvider(Provider):
             log.warning("display-name resolution error open_id=%s: %s", open_id, e)
         self._names[open_id] = name
         return name
-
-    def resolve_open_id(self, email):
-        req = (
-            BatchGetIdUserRequest.builder()
-            .user_id_type("open_id")
-            .request_body(
-                BatchGetIdUserRequestBody.builder()
-                .emails([email])
-                .include_resigned(False)
-                .build()
-            )
-            .build()
-        )
-        resp = self.client.contact.v3.user.batch_get_id(req)
-        if not resp.success():
-            raise LookupError(f"contact batch_get_id: code={resp.code} msg={resp.msg}")
-        for item in (resp.data.user_list or []):
-            if item.email == email and item.user_id:
-                return item.user_id
-        raise LookupError(f"email {email} was not found in Feishu/Lark contacts")
-
-
-# Keep the card callback response import at the bottom so the main flow stays readable.
-from lark_oapi.event.callback.model.p2_card_action_trigger import (  # noqa: E402
-    P2CardActionTriggerResponse,
-)

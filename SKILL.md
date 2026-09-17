@@ -11,8 +11,8 @@ Use the Python Bridge bundled with this Skill to start an independent Agent Back
 
 - The current working directory must be the git worktree the user wants to align. Do not accept remote URLs, clone repositories, or switch to another repository.
 - Feishu/Lark App Secret may be written only to user-level `~/.config/im-align/config.yaml`. It must not appear in replies, command arguments, repository files, or log excerpts.
-- The default permission policy is `callback`. Do not proactively recommend `auto_allow`; do not bypass Feishu/Lark Approval cards unless the user explicitly chooses it.
-- Repository `.im-align.yaml` may select non-secret grouped fields such as `im.provider`, `im.chat_id`, `agent.backend`, `agent.skill`, `agent.model`, `agent.command_alias`, `timeouts`, and `approval.mode: callback`; provider credentials and real executable commands live only in user-level config.
+- The Bridge applies a fixed Permission Policy: read-only operations and writes inside `agent.spec_root` may proceed; all other restricted operations are rejected. Do not add bypass flags to the Agent Backend.
+- Repository `.im-align.yaml` may select non-secret grouped fields such as `im.provider`, `im.chat_id`, `agent.backend`, `agent.skill`, `agent.model`, `agent.spec_root`, `agent.command_alias`, and `timeouts`; provider credentials and real executable commands live only in user-level config.
 - Run at most one Alignment on a machine at a time. If a run already exists, use `status` or `wait`; do not start a second Bridge.
 - After Alignment completes, report only the Spec and continuation commands. Do not start coding.
 
@@ -39,8 +39,6 @@ Determine these values from the current conversation and repository context:
 - `provider`: prefer the configured IM provider; use `--provider` only when the user provides a temporary provider-key override.
 - `chat_id`: prefer the configured default; use `--chat` only when the user provides a temporary override.
 - `command_alias`: prefer the configured trusted command alias; use `--command-alias` only when the user provides a temporary override.
-- `approval`: default to `callback`; use `--approval auto_allow --acknowledge-auto-allow` only when the user explicitly accepts the risk.
-- `initiator`: usually resolve automatically from same-app lark-cli, git email, or an interactive terminal prompt. open_id values from other apps cannot be reused; do not ask the user to provide one manually without reason.
 
 If the topic is unclear, ask only for the topic. Do not create extra questions when the other values have safe defaults.
 
@@ -68,7 +66,7 @@ Pass user-provided text safely as one shell argument; do not build commands by s
 uv run --project "$SKILL_DIR" python "$SKILL_DIR/scripts/bridge.py" start "$TOPIC" --json
 ```
 
-Append `--skill`, `--provider`, `--chat`, `--backend`, `--model`, `--command-alias`, `--approval`, `--acknowledge-auto-allow`, and `--initiator` only when the user specified them. After success, immediately tell the user the run_id, how to participate in the Feishu/Lark group by replying in the new Thread and mentioning the bot, and that the Bridge is running in the background.
+Append `--skill`, `--provider`, `--chat`, `--backend`, `--model`, and `--command-alias` only when the user specified them. `start` returns as soon as the background worker is spawned; it does not wait for Alignment to finish. After success, immediately tell the user the run_id, how to participate in the Feishu/Lark group by replying in the new Thread and mentioning the bot, and that the Bridge is running in the background.
 
 ### 4. Bounded Wait
 
@@ -78,14 +76,14 @@ Wait at most 600 seconds per call so one host Agent tool invocation does not han
 uv run --project "$SKILL_DIR" python "$SKILL_DIR/scripts/bridge.py" wait "$RUN_ID" --timeout 600 --json
 ```
 
-If `wait_timed_out=true` and state is still `starting` or `active`, briefly report that the run is still in progress and continue with another bounded wait if appropriate. Do not read logs instead of `status`; read the tail of `log_path` from JSON only when state is `failed` and the error is insufficient, and redact first.
+`--timeout` is an upper bound, not a fixed delay: the call returns as soon as the run reaches a terminal state, so a fast Alignment never waits the full 600 seconds. If `wait_timed_out=true` and state is still `starting` or `active`, briefly report that the run is still in progress and continue with another bounded wait if appropriate. Do not read logs instead of `status`; read the tail of `log_path` from JSON only when state is `failed` and the error is insufficient, and redact first.
 
 ### 5. Handle Terminal States
 
 - `done`: confirm that `cwd/spec_path` exists; report the Spec path, Feishu/Lark Thread root message ID, and `backend_resume_command`. Stop there and do not code.
 - `idle_timeout`: explain that the Session paused due to inactivity; provide `bridge_resume_command` and ask whether to resume.
 - `failed`: report `error` and the log path; after fixing the environment issue, use `resume` instead of creating a new run that loses the original Thread.
-- `stopped`: explain that the run was stopped by the initiator or terminal; use `resume` if work should continue.
+- `stopped`: explain that the run was stopped from the terminal; use `resume` if work should continue.
 
 Resume command:
 

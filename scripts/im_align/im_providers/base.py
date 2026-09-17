@@ -47,17 +47,3 @@ class Provider(abc.ABC):
     @abc.abstractmethod
     def user_name(self, open_id):
         """Resolve open_id to display name; fall back to short open_id on failure."""
-
-    @abc.abstractmethod
-    def resolve_open_id(self, email):
-        """Resolve email to open_id; raise LookupError when not found."""
-
-    # ---- Approval: Provider receives card button callbacks ----
-
-    @abc.abstractmethod
-    def register_approval(self, approval_id, initiator_open_id):
-        """Register one pending Approval and return the handle waiting for button clicks."""
-
-    @abc.abstractmethod
-    def cancel_approval(self, approval_id):
-        pass
