@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
 
@@ -28,13 +29,27 @@ jobs:
   # IM_ALIGN_E2E_CHAT_ID (dedicated test group),
   # IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN (rotating OAuth credential), and
   # IM_ALIGN_E2E_GITHUB_SECRETS_PAT (fine-grained, this repo, Secrets: write).
-  # This credentialed job never executes pull-request-controlled code. It runs
-  # only after trusted code lands on main; fork and same-repository PRs run the
-  # hermetic unit job without receiving token-rotation credentials.
+  #
+  # Two entry paths:
+  #   - push to main runs unattended against already-landed, reviewed code via
+  #     the im-align-e2e-main environment (no required reviewers).
+  #   - pull_request to main executes PR-controlled code, so it is restricted
+  #     to same-repository PRs -- fork PRs run the hermetic unit job only -- and
+  #     routed through the im-align-e2e-pr protected environment, whose required
+  #     reviewers must approve the diff before the job starts and credentials
+  #     are exposed.
+  # Token rotation rewrites a shared GitHub secret and therefore stays on the
+  # main path only; PR runs consume the stored token without rotating it.
   im-integration:
     needs: unit
-    if: vars.IM_ALIGN_E2E_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      vars.IM_ALIGN_E2E_ENABLED == 'true' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'pull_request' && 'im-align-e2e-pr' || 'im-align-e2e-main' }}
     concurrency:
       group: im-align-feishu-single-session
       cancel-in-progress: false
@@ -45,6 +60,7 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen
       - name: Refresh test-user OAuth token
+        if: github.event_name == 'push'
         env:
           IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
           IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
