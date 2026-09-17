@@ -1,0 +1,23 @@
+# First greenfield Scenario: empty seed, TODO list requirement.
+# Shared by all four verification layers; see docs/e2e-harness-design.md.
+name: todo-greenfield
+backend: opencode
+skill: grill-with-docs
+requirement: |
+  我想给个人项目加一个 TODO list 功能：可以添加任务、标记完成、按优先级排序，
+  数据只存在本地文件里，不需要同步。
+timeout_seconds: 900
+spec_root: docs/adr/
+expected_artifacts:
+  # Existence + git-allowlist are asserted here; the completion marker itself
+  # is validated Bridge-side from the reply text (completion.py), so the Spec
+  # file does not need to contain the marker line.
+  # The Agent may split the ADR-style Spec into any number of files.
+  - path: docs/adr/*.md
+llm_dimensions:
+  - agent_asked_clarifying_questions
+  - questions_addressed_requirement_gaps
+  - spec_content_covers_scenario_requirement
+user_brief: |
+  只补充 TODO list 相关需求，不引入新话题。优先级排序规则可以简化为高/中/低三档，
+  本地存储用单个 JSON 文件即可。

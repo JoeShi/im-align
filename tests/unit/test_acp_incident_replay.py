@@ -2,9 +2,9 @@
 
 A fake Agent Backend (line-delimited JSON-RPC over stdio) replays the live
 failure timeline of run-1789439169-73ee6b at small scale: prompt -> permission
-request -> approval decision -> agent never answers the prompt. The invariant:
-client.prompt() must still terminate with a cancelled Turn within the remaining
-working budget plus grace, no matter what the agent does after the Approval.
+request -> deterministic permission decision -> agent never answers the prompt.
+The invariant: client.prompt() must terminate with a cancelled Turn within the
+Turn budget plus grace.
 """
 
 import json
@@ -73,17 +73,17 @@ FAKE_AGENT = textwrap.dedent(
 )
 
 
-class ApprovalThenHangTests(unittest.TestCase):
-    def test_prompt_terminates_when_agent_hangs_after_approval(self):
+class PermissionThenHangTests(unittest.TestCase):
+    def test_prompt_terminates_when_agent_hangs_after_permission(self):
         with tempfile.TemporaryDirectory() as tmp:
             agent = Path(tmp) / "fake_agent.py"
             agent.write_text(FAKE_AGENT, encoding="utf-8")
             client = AcpClient(
                 [sys.executable, str(agent)],
                 cwd=tmp,
-                on_permission=lambda req: PermissionDecision("allow_once"),
+                spec_root="docs/specs",
+                decide_permission=lambda req: PermissionDecision("allow_once"),
                 turn_timeout=timedelta(seconds=0.8),
-                approval_timeout=timedelta(seconds=5),
             )
             try:
                 client.start()
@@ -94,8 +94,8 @@ class ApprovalThenHangTests(unittest.TestCase):
             finally:
                 client.close()
         self.assertEqual(turn.stop_reason, "cancelled")
-        # 0.8s budget + 0.1s pre-permission work + 1s poll granularity + grace.
-        self.assertLess(elapsed, 4.0, f"prompt hung for {elapsed:.1f}s after approval resume")
+        # 0.8s budget + 1s poll granularity + cancellation grace.
+        self.assertLess(elapsed, 4.0, f"prompt hung for {elapsed:.1f}s after permission")
 
 
 if __name__ == "__main__":

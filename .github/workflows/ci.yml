@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/unit/*.py
+      - run: uv run --frozen python -m unittest discover -s tests/unit -t .
+      - run: uv run --frozen python scripts/bridge.py --help
+      - run: git diff --check
+
+  # Feishu-touching layer. Serialized machine-wide against every other
+  # Feishu job via the shared concurrency group: one long connection per app,
+  # multiple connections shard events (AGENTS.md).
+  #
+  # Enable by setting the repository variable IM_ALIGN_E2E_ENABLED=true plus
+  # secrets: IM_ALIGN_E2E_FEISHU_APP_ID, IM_ALIGN_E2E_FEISHU_APP_SECRET,
+  # IM_ALIGN_E2E_CHAT_ID (dedicated test group),
+  # IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN (rotating OAuth credential), and
+  # IM_ALIGN_E2E_GITHUB_SECRETS_PAT (fine-grained, this repo, Secrets: write).
+  # This credentialed job never executes pull-request-controlled code. It runs
+  # only after trusted code lands on main; fork and same-repository PRs run the
+  # hermetic unit job without receiving token-rotation credentials.
+  im-integration:
+    needs: unit
+    if: vars.IM_ALIGN_E2E_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: im-align-feishu-single-session
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Refresh test-user OAuth token
+        env:
+          IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
+          IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
+          IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN: ${{ secrets.IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN }}
+          IM_ALIGN_E2E_GITHUB_SECRETS_PAT: ${{ secrets.IM_ALIGN_E2E_GITHUB_SECRETS_PAT }}
+        run: uv run --frozen python -m tests.e2e.refresh_user_token
+      - env:
+          IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
+          IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
+          IM_ALIGN_E2E_CHAT_ID: ${{ secrets.IM_ALIGN_E2E_CHAT_ID }}
+        run: uv run --frozen python -m tests.e2e.im_integration tests/e2e/scenarios/todo-greenfield

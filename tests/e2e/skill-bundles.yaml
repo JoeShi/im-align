@@ -1,0 +1,15 @@
+# Pinned Skill Bundles for real Backend Smoke / Full e2e runs.
+# Scenario files name only their entry Skill; the harness installs the bundle
+# closure before creating an external Feishu Session.
+bundles:
+  - name: grill-me
+    source: https://github.com/mattpocock/skills/archive/refs/tags/v1.2.3.zip
+    cli_version: "1.5.9"
+    skills:
+      - grill-me
+      - grill-with-docs
+      # grill-with-docs only forwards to these two; without them the Agent
+      # cannot load its own entry Skill (measured not_found on both).
+      - grilling
+      - domain-modeling
+      - to-spec

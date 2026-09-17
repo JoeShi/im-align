@@ -1,6 +1,6 @@
 # Python Static And Unit Verification
 
-This file describes baseline verification after ADR-0004. See `docs/steering/e2e-test.md` for real-machine paths.
+This file describes baseline verification after ADR-0004. The authoritative source for how to run each test layer is `docs/test/test-layers.md`; this file keeps the conventions for writing tests. See `docs/steering/e2e-test.md` for the developer feedback loop and real-machine notes.
 
 ## Every Code Change
 
