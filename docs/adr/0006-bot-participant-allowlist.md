@@ -1,6 +1,6 @@
 # Allowlisted Bot Participants for CI Customer Simulation
 
-Status: accepted.
+Status: accepted. Superseded by ADR-0010: the harness bot mode and this allowlist were removed after ADR-0009 measured that the platform never delivers bot-originated messages to the Bridge event stream.
 
 The Bridge discards every bot message in the Thread (`FeishuProvider._on_message` drops `sender_type == "bot"`) because group bot traffic is mostly other bots' chatter. The Backend Smoke layer, however, needs a non-human actor to play the customer in CI: there is no user OAuth flow in CI to mint a `user_access_token` for the User Simulator. We decided to add an explicit allowlist — `im.extra_participant_open_ids` — whose bot open_ids pass the defensive filter and drive Turns like a human participant. The default is empty, so production behavior is unchanged.
 

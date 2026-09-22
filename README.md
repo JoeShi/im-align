@@ -64,7 +64,6 @@ The Feishu/Lark app must enable bot capability and subscribe through long connec
 Scope definitions and detailed setup steps:
 
 - `references/lark-scopes.json`
-- `references/lark-e2e-simulator-scopes.json` (test-only bot Participant Mode)
 - `references/feishu-setup.md`
 
 Initial setup:

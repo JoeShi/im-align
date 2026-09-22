@@ -23,7 +23,7 @@ class FailureArchiveTests(unittest.TestCase):
                     **fixtures.SmokeCredentialsTests.FEISHU,
                     **fixtures.SmokeCredentialsTests.LLM,
                     **fixtures.SmokeCredentialsTests.USER_MODE,
-                    "IM_ALIGN_E2E_RUNS_DIR": tmp,
+                    "E2E_RUNS_DIR": tmp,
                 }
                 verifier = Mock()
                 verifier.messages_since.return_value = [
@@ -71,8 +71,8 @@ class FailureArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = {
                 **fixtures.SmokeCredentialsTests.FEISHU, **fixtures.SmokeCredentialsTests.LLM,
-                **fixtures.SmokeCredentialsTests.USER_MODE, "IM_ALIGN_E2E_RUNS_DIR": tmp,
-                "SIMULATOR_LLM_API_KEY": "private-api-key",
+                **fixtures.SmokeCredentialsTests.USER_MODE, "E2E_RUNS_DIR": tmp,
+                "E2E_SIMULATOR_LLM_API_KEY": "private-api-key",
             }
             workspace_seen = []
 
@@ -115,7 +115,7 @@ class FailureArchiveTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             env = {
                 **fixtures.SmokeCredentialsTests.FEISHU, **fixtures.SmokeCredentialsTests.LLM,
-                **fixtures.SmokeCredentialsTests.USER_MODE, "IM_ALIGN_E2E_RUNS_DIR": tmp,
+                **fixtures.SmokeCredentialsTests.USER_MODE, "E2E_RUNS_DIR": tmp,
             }
             verifier = Mock()
             verifier.messages_since.return_value = [{"message_id": "question"}]
@@ -146,7 +146,7 @@ class FailureArchiveTests(unittest.TestCase):
 class StrictSmokeTests(unittest.TestCase):
     def test_missing_credentials_fail_strict_but_remain_optional_locally(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
-            "os.environ", {"IM_ALIGN_E2E_RUNS_DIR": tmp}, clear=True,
+            "os.environ", {"E2E_RUNS_DIR": tmp}, clear=True,
         ), redirect_stdout(io.StringIO()):
             self.assertEqual(main([str(SCENARIO_DIR), "--strict"]), 1)
             self.assertEqual(main([str(SCENARIO_DIR)]), 0)

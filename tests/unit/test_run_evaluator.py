@@ -17,7 +17,6 @@ def run(fake: FakeEvaluatorLLM, assertions=None):
         run_id="run-test",
         scenario=scenario.name,
         backend=scenario.backend,
-        participant_mode="bot",
         evidence="transcript export and artifact summary",
         deterministic_assertions=assertions
         if assertions is not None
@@ -48,7 +47,6 @@ class RunEvaluatorTests(unittest.TestCase):
                 "run_id",
                 "scenario",
                 "backend",
-                "participant_mode",
                 "verdict",
                 "deterministic_assertions",
                 "llm_evaluation",
@@ -59,7 +57,6 @@ class RunEvaluatorTests(unittest.TestCase):
         self.assertEqual(rubric["run_id"], "run-test")
         self.assertEqual(rubric["scenario"], "todo-greenfield")
         self.assertEqual(rubric["backend"], load_scenario(SCENARIO_DIR).backend)
-        self.assertEqual(rubric["participant_mode"], "bot")
 
     def test_deterministic_failure_is_product_bug(self):
         rubric = run(

@@ -8,20 +8,19 @@ assertions, archives the Thread transcript, runs the Run Evaluator over the
 scenario's llm_dimensions, and writes the rubric JSON next to the run logs.
 
 Layers (docs/e2e-harness-design.md):
-  - Backend Smoke: one (Scenario, Agent Backend, Participant Mode) tuple;
-  - Full e2e: every Agent Backend in supported as-user mode for every Scenario.
+  - Backend Smoke: one (Scenario, Agent Backend) tuple;
+  - Full e2e: every Agent Backend for every Scenario.
 
 Entry points:
-    python -m tests.e2e.smoke_runner <scenario_dir> --backend kiro-cli --participant-mode as-user
-    python -m tests.e2e.smoke_runner <scenario_dir> --backends all --participant-mode as-user
-    python -m tests.e2e.smoke_runner <scenario_dir> --backend kiro-cli --participant-mode bot
+    python -m tests.e2e.smoke_runner <scenario_dir> --backend kiro-cli
+    python -m tests.e2e.smoke_runner <scenario_dir> --backends all
 
-Credentials come only from the environment: IM_ALIGN_E2E_* for Feishu/Lark,
-the supported user Participant identity, and SIMULATOR_LLM_* plus
-EVALUATOR_LLM_* for the two LLM roles. `bot` and `all` remain explicit
-platform diagnostics; bot is expected to fail the acknowledgement/Turn gates
-recorded by ADR-0009. Missing configuration skips only the affected tuple, so
-nothing is half-run.
+Credentials come only from the environment: E2E_BRIDGE_* for the Feishu/Lark
+Bridge app, E2E_SIMULATOR_* for the as-user Participant identity (the only
+supported mode; ADR-0010 removed the bot mode after ADR-0009 measured that
+bot-originated messages never reach the Bridge event stream), and
+E2E_SIMULATOR_LLM_* plus E2E_EVALUATOR_LLM_* for the two LLM roles. Missing
+configuration skips only the affected tuple, so nothing is half-run.
 """
 
 import argparse
@@ -66,9 +65,8 @@ from tests.e2e.transports import (
 from tests.e2e.user_simulator import SimulatorState, build_graph, transcript_export
 
 ALL_BACKENDS = list(SUPPORTED_BACKENDS)
-PARTICIPANT_MODES = ("as-user", "bot")
 
-ENV_RUNS_DIR = "IM_ALIGN_E2E_RUNS_DIR"
+ENV_RUNS_DIR = "E2E_RUNS_DIR"
 
 POLL_INTERVAL_SECONDS = 3.0
 
@@ -76,7 +74,6 @@ POLL_INTERVAL_SECONDS = 3.0
 class SmokeResult:
     scenario: str
     backend: str
-    participant_mode: str = "as-user"
     run_id: str = ""
     state: str = ""
     skipped: bool = False
@@ -111,18 +108,6 @@ def backend_matrix(scenario: Scenario, backends_arg: str | None) -> list:
     return requested
 
 
-def participant_mode_matrix(mode: str) -> list:
-    """Expand one explicit participant mode into the run matrix."""
-    if mode == "all":
-        return list(PARTICIPANT_MODES)
-    if mode not in PARTICIPANT_MODES:
-        raise IntegrationSkip(
-            f"unsupported participant mode: {mode}; "
-            f"supported: {', '.join(PARTICIPANT_MODES)}, all"
-        )
-    return [mode]
-
-
 def runs_root(env=None) -> Path:
     """Archive root for run artifacts; env override wins, then XDG_STATE_HOME."""
     env = env if env is not None else os.environ
@@ -148,25 +133,25 @@ def summarize(results: list) -> dict:
     }
 
 
-def smoke_credentials(env, participant_mode: str) -> dict:
-    """Load common credentials plus the explicitly selected participant mode."""
+def smoke_credentials(env) -> dict:
+    """Load common credentials plus the as-user Participant identity."""
     creds = feishu_credentials(env)
     try:
-        creds["participant"] = participant_from_env(participant_mode, env)
+        creds["participant"] = participant_from_env(env)
     except ParticipantConfigError as e:
         raise IntegrationSkip(str(e)) from e
     missing_llm = [
         name
         for name, key in (
-            ("SIMULATOR_LLM_BASE_URL/API_KEY/MODEL", "SIMULATOR_LLM_BASE_URL"),
-            ("EVALUATOR_LLM_BASE_URL/API_KEY/MODEL", "EVALUATOR_LLM_BASE_URL"),
+            ("E2E_SIMULATOR_LLM_BASE_URL/API_KEY/MODEL", "E2E_SIMULATOR_LLM_BASE_URL"),
+            ("E2E_EVALUATOR_LLM_BASE_URL/API_KEY/MODEL", "E2E_EVALUATOR_LLM_BASE_URL"),
         )
         if not env.get(key, "")
     ]
     if missing_llm:
         raise IntegrationSkip(
             f"missing LLM configuration: {', '.join(missing_llm)}; "
-            "set SIMULATOR_LLM_BASE_URL/API_KEY/MODEL and EVALUATOR_LLM_*"
+            "set E2E_SIMULATOR_LLM_BASE_URL/API_KEY/MODEL and E2E_EVALUATOR_LLM_*"
         )
     return creds
 
@@ -216,22 +201,22 @@ def run_simulator(
     return state
 
 
-# ---- One (Scenario, Agent Backend, Participant Mode) run ----
+# ---- One (Scenario, Agent Backend) run ----
 
 
-def run_smoke(scenario_dir, backend=None, participant_mode="as-user", **options):
+def run_smoke(scenario_dir, backend=None, **options):
     """Archive each attempt before its isolated workspace is removed."""
     env = options.get("env")
     env = os.environ if env is None else env
     scenario = load_scenario(scenario_dir)
-    result = SmokeResult(scenario.name, backend or scenario.backend, participant_mode)
+    result = SmokeResult(scenario.name, backend or scenario.backend)
     archive = run_archive_dir(runs_root(env), f"attempt-{uuid.uuid4().hex}")
     archive.mkdir(parents=True, exist_ok=False)
     result.run_dir = str(archive)
     with tempfile.TemporaryDirectory(prefix="im-align-smoke-") as tmp:
         diagnostics = SmokeDiagnostics(result, env, tmp, archive, scenario.spec_root)
         try:
-            _run_smoke(scenario_dir, backend, participant_mode, diagnostics=diagnostics, **options)
+            _run_smoke(scenario_dir, backend, diagnostics=diagnostics, **options)
         except Exception as error:
             diagnostics.error("run", error)
             result.verdict = "fail"
@@ -271,7 +256,6 @@ def run_smoke(scenario_dir, backend=None, participant_mode="as-user", **options)
 def _run_smoke(
     scenario_dir,
     backend: str | None = None,
-    participant_mode: str = "as-user",
     cloner: SeedCloner | None = None,
     verifier: ThreadVerifier | None = None,
     thread_transport=None,
@@ -281,7 +265,7 @@ def _run_smoke(
     poll_interval: float = POLL_INTERVAL_SECONDS,
     diagnostics=None,
 ) -> SmokeResult:
-    """Run one (Scenario, Agent Backend, Participant Mode) tuple."""
+    """Run one (Scenario, Agent Backend) tuple."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -291,7 +275,7 @@ def _run_smoke(
     backend = backend or scenario.backend
     result = diagnostics.result
     try:
-        creds = smoke_credentials(env, participant_mode)
+        creds = smoke_credentials(env)
         participant = creds["participant"]
         if simulator_llm is None:
             simulator_llm = simulator_llm_from_env(env)
@@ -299,7 +283,7 @@ def _run_smoke(
             evaluator_llm = evaluator_llm_from_env(env)
         if simulator_llm is None or evaluator_llm is None:
             raise IntegrationSkip(
-                "incomplete LLM configuration: SIMULATOR_LLM_* and EVALUATOR_LLM_* "
+                "incomplete LLM configuration: E2E_SIMULATOR_LLM_* and E2E_EVALUATOR_LLM_* "
                 "each need BASE_URL, API_KEY, and MODEL"
             )
     except IntegrationSkip as e:
@@ -327,7 +311,6 @@ def _run_smoke(
         creds,
         scenario,
         backend=backend,
-        extra_participant_open_ids=participant.extra_participant_open_ids,
         turn_timeout_seconds=scenario.timeout_seconds,
     )
     run_env = bridge_worker_env(env, config_home, state_home)
@@ -508,7 +491,6 @@ def _run_smoke(
     evidence = json.dumps(
         {
             "transcript": transcript_items,
-            "participant_mode": participant_mode,
             "simulator_events": simulator_final.get("events") or [],
             "deterministic_assertions": result.deterministic_assertions,
         },
@@ -519,7 +501,6 @@ def _run_smoke(
         run_id=result.run_id,
         scenario=scenario.name,
         backend=backend,
-        participant_mode=participant_mode,
         evidence=evidence,
         deterministic_assertions=result.deterministic_assertions,
         dimensions=scenario.llm_dimensions,
@@ -554,19 +535,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="single backend override; same as --backends with one value",
     )
-    parser.add_argument(
-        "--participant-mode",
-        choices=(*PARTICIPANT_MODES, "all"),
-        default="as-user",
-        help="User Simulator identity: as-user, bot, or all",
-    )
     return parser
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     backends_arg = args.backend or args.backends
-    participant_modes = participant_mode_matrix(args.participant_mode)
     results = []
     for scenario_dir in args.scenarios:
         scenario = load_scenario(scenario_dir)
@@ -579,19 +553,16 @@ def main(argv=None) -> int:
             results.append(result)
             continue
         for backend in backends:
-            for participant_mode in participant_modes:
-                result = run_smoke(
-                    scenario_dir,
-                    backend=backend,
-                    participant_mode=participant_mode,
-                )
-                results.append(result)
-                status = "SKIP" if result.skipped else result.verdict.upper()
-                print(
-                    f"[{status}] {result.scenario} x {result.backend} x "
-                    f"{result.participant_mode}: "
-                    f"{result.skip_reason or result.failure_cause or 'ok'}; artifacts: {result.run_dir}"
-                )
+            result = run_smoke(
+                scenario_dir,
+                backend=backend,
+            )
+            results.append(result)
+            status = "SKIP" if result.skipped else result.verdict.upper()
+            print(
+                f"[{status}] {result.scenario} x {result.backend}: "
+                f"{result.skip_reason or result.failure_cause or 'ok'}; artifacts: {result.run_dir}"
+            )
     summary = summarize(results)
     print(json.dumps(summary, ensure_ascii=False))
     return int(bool(summary["failed"] or (args.strict and (summary["skipped"] or not summary["total"]))))

@@ -25,7 +25,6 @@ TIMEOUT_KEYS = (
 DEFAULTS = {
     "provider": "",
     "chat_id": "",
-    "extra_participant_open_ids": [],
     "backend": BACKEND_OPENCODE,
     "model": "",
     "skill": "grill-with-docs",
@@ -37,11 +36,16 @@ DEFAULTS = {
     "idle_timeout_seconds": 1800,
 }
 
+# Spec Root defaults per Alignment Skill, applied only when no config layer sets
+# agent.spec_root; skills without an entry keep DEFAULTS["spec_root"].
+SKILL_SPEC_ROOT_DEFAULTS = {
+    "grill-with-docs": "docs/adr",
+}
+
 GROUPED_SECTION_KEYS = {
     "im": {
         "provider": "provider",
         "chat_id": "chat_id",
-        "extra_participant_open_ids": "extra_participant_open_ids",
     },
     "agent": {
         "backend": "backend",
@@ -62,7 +66,6 @@ USER_ALLOWED_KEYS = {
 USER_DEFAULT_ALLOWED_SECTIONS = {
     "im": {
         "provider": "provider",
-        "extra_participant_open_ids": "extra_participant_open_ids",
     },
     "agent": GROUPED_SECTION_KEYS["agent"],
     "timeouts": GROUPED_SECTION_KEYS["timeouts"],
@@ -115,25 +118,6 @@ def normalize_spec_root(value):
             f"'..' components: {value!r}"
         )
     return parsed.as_posix()
-
-
-def _validate_extra_participants(value):
-    """Validate im.extra_participant_open_ids: list of non-empty ou_ strings.
-
-    Empty list (the default) preserves the current behavior where every bot
-    message is discarded (ADR-0006).
-    """
-    if value is None:
-        return []
-    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        raise ConfigError("im.extra_participant_open_ids must be an array of strings")
-    bad = [v for v in value if not v.startswith("ou_")]
-    if bad:
-        raise ConfigError(
-            "im.extra_participant_open_ids entries must be non-empty open_id values "
-            f"starting with 'ou_': {bad!r}"
-        )
-    return list(value)
 
 
 def user_config_dir():
@@ -313,7 +297,6 @@ def _with_grouped_sections(cfg):
         "provider": cfg["provider"],
         "type": cfg["provider_type"],
         "chat_id": cfg["chat_id"],
-        "extra_participant_open_ids": list(cfg.get("extra_participant_open_ids") or []),
     }
     grouped["agent"] = {
         "backend": cfg["backend"],
@@ -372,6 +355,11 @@ def load(cwd, cli_overrides=None):
     merged.update({k: v for k, v in defaults.items() if v is not None})
     merged.update({k: v for k, v in repo.items() if v is not None})
     merged.update({k: v for k, v in cli_overrides.items() if v is not None})
+    explicit_keys = {
+        key for layer in (defaults, repo, cli_overrides) for key, value in layer.items() if value is not None
+    }
+    if "spec_root" not in explicit_keys:
+        merged["spec_root"] = SKILL_SPEC_ROOT_DEFAULTS.get(merged["skill"], merged["spec_root"])
 
     providers = _read_providers(user.get("providers"))
     commands = _read_commands(user.get("commands"))
@@ -395,9 +383,6 @@ def load(cwd, cli_overrides=None):
 
 def validate(cfg):
     cfg["spec_root"] = normalize_spec_root(cfg.get("spec_root"))
-    cfg["extra_participant_open_ids"] = _validate_extra_participants(
-        cfg.get("extra_participant_open_ids")
-    )
     if not isinstance(cfg["provider"], str) or not cfg["provider"]:
         raise ConfigError("im.provider must resolve to a non-empty provider key")
     if cfg["provider_type"] not in PROVIDER_TYPE_DOMAINS:

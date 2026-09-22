@@ -187,14 +187,14 @@ class FakeEvaluatorLLM(EvaluatorLLMTransport):
 
 
 def evaluator_llm_from_env(env) -> EvaluatorLLMTransport | None:
-    """Build a real evaluator LLM from SIMULATOR/EVALUATOR_LLM_* env vars.
+    """Build a real evaluator LLM from the E2E_EVALUATOR_LLM_* env vars.
 
     Returns None when the configuration is incomplete so callers can skip
     cleanly instead of failing; no provider is hardcoded.
     """
-    base_url = env.get("EVALUATOR_LLM_BASE_URL", "")
-    api_key = env.get("EVALUATOR_LLM_API_KEY", "")
-    model = env.get("EVALUATOR_LLM_MODEL", "")
+    base_url = env.get("E2E_EVALUATOR_LLM_BASE_URL", "")
+    api_key = env.get("E2E_EVALUATOR_LLM_API_KEY", "")
+    model = env.get("E2E_EVALUATOR_LLM_MODEL", "")
     if not (base_url and api_key and model):
         return None
     return OpenAICompatibleEvaluator(base_url=base_url, api_key=api_key, model=model)
@@ -266,10 +266,10 @@ def build_simulator_prompt(question: str, user_brief: str) -> str:
 
 
 def simulator_llm_from_env(env) -> "OpenAICompatibleSimulator | None":
-    """Build a real simulator LLM from SIMULATOR_LLM_* env vars; None if incomplete."""
-    base_url = env.get("SIMULATOR_LLM_BASE_URL", "")
-    api_key = env.get("SIMULATOR_LLM_API_KEY", "")
-    model = env.get("SIMULATOR_LLM_MODEL", "")
+    """Build a real simulator LLM from the E2E_SIMULATOR_LLM_* env vars; None if incomplete."""
+    base_url = env.get("E2E_SIMULATOR_LLM_BASE_URL", "")
+    api_key = env.get("E2E_SIMULATOR_LLM_API_KEY", "")
+    model = env.get("E2E_SIMULATOR_LLM_MODEL", "")
     if not (base_url and api_key and model):
         return None
     return OpenAICompatibleSimulator(base_url=base_url, api_key=api_key, model=model)
@@ -310,6 +310,9 @@ class OpenAICompatibleSimulator(SimulatorLLMTransport):
 
 
 # ---- Feishu OpenAPI polling transport (user token; no long connection) ----
+# The transport and verifier are user-token only: ADR-0009 measured that the
+# platform never delivers bot-originated messages to the Bridge event stream,
+# so ADR-0010 removed the tenant-token (bot) transport path.
 
 
 def select_fresh(items: list, seen: dict) -> list:
@@ -397,14 +400,7 @@ def thread_message_from_api_item(item: dict) -> ThreadMessage:
 
 
 class OpenAPIThreadTransport(ThreadTransport):
-    """Poll the Thread over OpenAPI instead of a long connection.
-
-    Two simulator identities, exactly one of which is required (ADR-0006):
-      - user_access_token: a test user's token; replies post as the user.
-      - app_id + app_secret: a second dedicated app ("customer bot"); the
-        transport exchanges and caches a tenant_access_token, refreshing it
-        before expiry, and the Bridge must allowlist the bot's open_id via
-        im.extra_participant_open_ids.
+    """Poll the Thread over OpenAPI under the test-user identity.
 
     Polling keeps the machine-level single-session lock free for the Bridge
     (docs/e2e-harness-design.md). Each poll() fetches recent messages, drops
@@ -413,13 +409,11 @@ class OpenAPIThreadTransport(ThreadTransport):
     and returns one queued message. urlopen and clock are injectable for
     tests.
 
-    Measured constraint: the chat-container listing omits thread replies
-    entirely for bot identities, so a bound transport resolves the root
-    message's thread_id once and then lists the thread container; the thread
-    container rejects message ids, so the root lookup is mandatory.
+    Measured constraint: the chat-container listing omits thread replies for
+    bot identities, so a bound transport resolves the root message's
+    thread_id once and then lists the thread container; the thread container
+    rejects message ids, so the root lookup is mandatory.
     """
-
-    TOKEN_REFRESH_MARGIN_SECONDS = 300.0
 
     def __init__(
         self,
@@ -427,33 +421,16 @@ class OpenAPIThreadTransport(ThreadTransport):
         chat_id: str = "",
         root_message_id: str = "",
         domain: str = "feishu",
-        app_id: str = "",
-        app_secret: str = "",
         mention_open_id: str = "",
         can_post=None,
         urlopen=None,
-        clock=None,
     ):
-        if user_access_token and (app_id or app_secret):
-            raise ValueError(
-                "user_access_token and app_id/app_secret are mutually exclusive; "
-                "pass exactly one simulator identity"
-            )
-        if not user_access_token and not (app_id and app_secret):
-            raise ValueError(
-                "either user_access_token or app_id + app_secret is required"
-            )
+        if not user_access_token:
+            raise ValueError("user_access_token is required")
         self._user_token = user_access_token
-        self._app_id = app_id
-        self._app_secret = app_secret
         self._mention_open_id = mention_open_id
         self._can_post = can_post or (lambda: True)
-        self._tenant_token = ""
-        self._tenant_expires_at = 0.0
         self._urlopen = urlopen or urllib.request.urlopen
-        import time
-
-        self._clock = clock or time.monotonic
         self._chat_id = chat_id
         self._root_message_id = root_message_id
         self._thread_id = ""
@@ -470,37 +447,7 @@ class OpenAPIThreadTransport(ThreadTransport):
         self._queue = []
 
     def _token(self) -> str:
-        if self._user_token:
-            return self._user_token
-        now = self._clock()
-        if (
-            self._tenant_token
-            and now < self._tenant_expires_at - self.TOKEN_REFRESH_MARGIN_SECONDS
-        ):
-            return self._tenant_token
-        resp = self._request_raw(
-            "POST",
-            "/open-apis/auth/v3/tenant_access_token/internal",
-            {"app_id": self._app_id, "app_secret": self._app_secret},
-        )
-        if resp.get("code") != 0:
-            raise RuntimeError(f"tenant_access_token failed: {resp.get('msg')}")
-        self._tenant_token = resp["tenant_access_token"]
-        # Feishu returns "expire" (seconds until expiry); accept expires_in too.
-        ttl = float(resp.get("expire") or resp.get("expires_in") or 3600)
-        self._tenant_expires_at = now + ttl
-        return self._tenant_token
-
-    def _request_raw(self, method: str, path: str, body: dict | None = None) -> dict:
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(
-            self._base + path,
-            data=data,
-            method=method,
-            headers={"Content-Type": "application/json; charset=utf-8"},
-        )
-        with self._urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        return self._user_token
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
         data = json.dumps(body).encode("utf-8") if body is not None else None

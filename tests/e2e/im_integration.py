@@ -61,9 +61,9 @@ FAKE_AGENT_PATH = Path(__file__).resolve().parent / "fake_acp_agent.py"
 
 # Environment variables holding CI secrets for the real Feishu Thread. Never
 # hardcode values; a missing variable skips the run.
-ENV_APP_ID = "IM_ALIGN_E2E_FEISHU_APP_ID"
-ENV_APP_SECRET = "IM_ALIGN_E2E_FEISHU_APP_SECRET"
-ENV_CHAT_ID = "IM_ALIGN_E2E_CHAT_ID"
+ENV_APP_ID = "E2E_BRIDGE_FEISHU_APP_ID"
+ENV_APP_SECRET = "E2E_BRIDGE_FEISHU_APP_SECRET"
+ENV_CHAT_ID = "E2E_BRIDGE_CHAT_ID"
 
 COMPLETION_CARD_TITLE = "✅ Alignment Complete"
 
@@ -249,12 +249,11 @@ def find_approval_card(messages: list) -> bool:
 
 
 class FeishuOpenAPIVerifier(ThreadVerifier):
-    """Poll im/v1/messages over HTTPS; keeps the long-connection lock free.
+    """Poll im/v1/messages over HTTPS under the user identity; keeps the long-connection lock free.
 
-    Two identities, exactly one of which is required (mirroring the
-    transports): app_id + app_secret (tenant token), or a user_access_token.
     The Bridge app intentionally lacks im:message.group_msg, so the runner
-    builds this with the Participant identity, never the Bridge credentials.
+    builds this with the test-user Participant identity, never the Bridge
+    credentials.
 
     Measured constraint: the chat-container listing omits thread replies for
     bot identities, so when root_message_id is set the verifier resolves the
@@ -263,22 +262,12 @@ class FeishuOpenAPIVerifier(ThreadVerifier):
 
     def __init__(
         self,
-        app_id: str = "",
-        app_secret: str = "",
         domain: str = "feishu",
         user_access_token: str = "",
         root_message_id: str = "",
     ):
-        if user_access_token and (app_id or app_secret):
-            raise ValueError(
-                "user_access_token and app_id/app_secret are mutually exclusive"
-            )
-        if not user_access_token and not (app_id and app_secret):
-            raise ValueError(
-                "either user_access_token or app_id + app_secret is required"
-            )
-        self._app_id = app_id
-        self._app_secret = app_secret
+        if not user_access_token:
+            raise ValueError("user_access_token is required")
         self._user_access_token = user_access_token
         self._root_message_id = root_message_id
         self._thread_id = ""
@@ -302,20 +291,8 @@ class FeishuOpenAPIVerifier(ThreadVerifier):
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
-    def _tenant_token(self) -> str:
-        resp = self._request(
-            "POST",
-            "/open-apis/auth/v3/tenant_access_token/internal",
-            {"app_id": self._app_id, "app_secret": self._app_secret},
-        )
-        if resp.get("code") != 0:
-            raise RuntimeError(f"tenant_access_token failed: {resp.get('msg')}")
-        return resp["tenant_access_token"]
-
     def _token(self) -> str:
-        if self._user_access_token:
-            return self._user_access_token
-        return self._tenant_token()
+        return self._user_access_token
 
     def _resolve_thread_id(self, token: str) -> str:
         if self._thread_id:
@@ -490,13 +467,11 @@ def _write_user_config(
     creds: dict,
     scenario: Scenario,
     backend: str | None = None,
-    extra_participant_open_ids=(),
     turn_timeout_seconds: int | None = None,
 ):
     defaults = {
         "im": {
             "provider": "e2e",
-            "extra_participant_open_ids": list(extra_participant_open_ids),
         },
         "agent": {"backend": backend or scenario.backend, "spec_root": scenario.spec_root},
     }
@@ -579,7 +554,7 @@ def run_integration(
             except ImportError:
                 from participants import ParticipantConfigError, participant_from_env
             try:
-                participant = participant_from_env("as-user", env)
+                participant = participant_from_env(env)
             except ParticipantConfigError as e:
                 raise IntegrationSkip(str(e)) from e
     except IntegrationSkip as e:

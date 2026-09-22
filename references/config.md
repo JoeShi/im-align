@@ -16,14 +16,11 @@ providers:
 defaults:
   im:
     provider: work
-    # Optional (ADR-0006): bots whose Thread messages drive Turns like
-    # participants. Empty default keeps every bot message discarded.
-    extra_participant_open_ids: []
   agent:
     backend: opencode # or trae-cli / kiro-cli / kimi
     skill: grill-with-docs
     model: ""
-    spec_root: docs/specs # optional; defaults to docs/specs, see ADR-0005
+    spec_root: docs/specs # optional; defaults per Skill (docs/adr for grill-with-docs, otherwise docs/specs), see ADR-0005
     command_alias: safe-opencode
   timeouts:
     turn_timeout_seconds: 300
@@ -47,15 +44,13 @@ Path: `.im-align.yaml` at the current git worktree root. It may be committed, bu
 im:
   provider: work
   chat_id: oc_xxx
-  # Optional (ADR-0006): allowlisted bot participants for CI customer
-  # simulation; empty default keeps every bot message discarded.
-  extra_participant_open_ids: []
 agent:
   backend: opencode
   model: ""
   skill: grill-with-docs
   # Optional (ADR-0005): the only repository-relative directory where the
-  # Bridge permits Spec writes. Defaults to docs/specs. Must not be absolute,
+  # Bridge permits Spec writes. Defaults per Skill: docs/adr for grill-with-docs,
+  # otherwise docs/specs. Must not be absolute,
   # equal to '.', or contain '..' components.
   spec_root: docs/specs
   command_alias: safe-opencode
@@ -72,12 +67,12 @@ Repository config is strict: old flat fields, the removed `approval` section, `p
 - Chat selection: CLI `--chat`, then repository `im.chat_id`, then selected provider `default_chat_id`.
 - Agent Backend selection: CLI `--backend`, then repository `agent.backend`, then user `defaults.agent.backend`, then the built-in default.
 - Command alias selection: CLI `--command-alias`, then repository `agent.command_alias`, then user `defaults.agent.command_alias`; if empty, built-in backend argv is used.
-- Spec Root selection: repository `agent.spec_root`, then user `defaults.agent.spec_root`, then the built-in `docs/specs` default.
+- Spec Root selection: repository `agent.spec_root`, then user `defaults.agent.spec_root`, then the per-Skill default (`docs/adr` for grill-with-docs, otherwise the built-in `docs/specs`).
 
 ## Safety Boundaries
 
 - The Permission Policy allows read/search/fetch/think once and allows edits once only when every resolved real target is a file inside `agent.spec_root` (ADR-0005). Execute, delete, move, unknown, outside-root, and unverifiable operations are rejected.
-- Bot messages are discarded unless the sender's open_id is in `im.extra_participant_open_ids` (ADR-0006). Allowlisted bots drive Turns; keep the list empty outside dedicated CI setups.
+- Bot messages are discarded unconditionally (ADR-0010): the platform never delivers bot-originated messages to the Bridge event stream (ADR-0009), so no allowlist exists.
 - Thread messages cannot stop a Session. Use the local `bridge.py stop` command for lifecycle control (ADR-0007).
 - The Agent Backend must be configured to ask for native restricted operations. A Backend that bypasses ACP permission requests is outside the Bridge enforcement boundary.
 - Command aliases are trusted executable plans and may exist only in user-level `commands`.

@@ -35,15 +35,14 @@ _DOMAINS = {
 
 
 class FeishuProvider(Provider):
-    def __init__(self, app_id, app_secret, domain="feishu", extra_participants=()):
+    def __init__(self, app_id, app_secret, domain="feishu"):
         self._app_id = app_id
         self._app_secret = app_secret
         self._domain = _DOMAINS[domain]
-        # ADR-0006: bot messages are discarded by default because group bot
-        # traffic is mostly unrelated chatter. An entry here is an explicitly
-        # configured allowlist (typically a dedicated second CI app playing the
-        # customer); an allowlisted bot drives Turns like a human participant.
-        self._extra_participants = frozenset(extra_participants)
+        # Bot-originated messages are never delivered to the Bridge event
+        # stream (measured 2026-09-16, ADR-0009), so every bot message is
+        # discarded unconditionally (ADR-0010); ADR-0006's allowlist was
+        # removed together with the harness bot mode.
         self.client = (
             lark.Client.builder()
             .app_id(app_id)
@@ -135,7 +134,8 @@ class FeishuProvider(Provider):
                 return
             sender_type = getattr(sender, "sender_type", "")
             sender_open_id = sender.sender_id.open_id if sender.sender_id else ""
-            if sender_type == "bot" and sender_open_id not in self._extra_participants:
+            if sender_type == "bot":
+                log.debug("discarding bot message open_id=%s", sender_open_id)
                 return
             text = self._extract_text(msg)
             self._events.put(

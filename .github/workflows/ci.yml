@@ -25,10 +25,10 @@ jobs:
   # multiple connections shard events (AGENTS.md).
   #
   # Enable by setting the repository variable IM_ALIGN_E2E_ENABLED=true plus
-  # secrets: IM_ALIGN_E2E_FEISHU_APP_ID, IM_ALIGN_E2E_FEISHU_APP_SECRET,
-  # IM_ALIGN_E2E_CHAT_ID (dedicated test group),
-  # IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN (rotating OAuth credential), and
-  # IM_ALIGN_E2E_GITHUB_SECRETS_PAT (fine-grained, this repo, Secrets: write).
+  # secrets: E2E_BRIDGE_FEISHU_APP_ID, E2E_BRIDGE_FEISHU_APP_SECRET,
+  # E2E_BRIDGE_CHAT_ID (dedicated test group),
+  # E2E_SIMULATOR_USER_REFRESH_TOKEN (rotating OAuth credential), and
+  # E2E_SIMULATOR_GITHUB_SECRETS_PAT (fine-grained, this repo, Secrets: write).
   #
   # Two entry paths:
   #   - push to main runs unattended against already-landed, reviewed code via
@@ -62,13 +62,13 @@ jobs:
       - name: Refresh test-user OAuth token
         if: github.event_name == 'push'
         env:
-          IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
-          IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
-          IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN: ${{ secrets.IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN }}
-          IM_ALIGN_E2E_GITHUB_SECRETS_PAT: ${{ secrets.IM_ALIGN_E2E_GITHUB_SECRETS_PAT }}
+          E2E_BRIDGE_FEISHU_APP_ID: ${{ secrets.E2E_BRIDGE_FEISHU_APP_ID }}
+          E2E_BRIDGE_FEISHU_APP_SECRET: ${{ secrets.E2E_BRIDGE_FEISHU_APP_SECRET }}
+          E2E_SIMULATOR_USER_REFRESH_TOKEN: ${{ secrets.E2E_SIMULATOR_USER_REFRESH_TOKEN }}
+          E2E_SIMULATOR_GITHUB_SECRETS_PAT: ${{ secrets.E2E_SIMULATOR_GITHUB_SECRETS_PAT }}
         run: uv run --frozen python -m tests.e2e.refresh_user_token
       - env:
-          IM_ALIGN_E2E_FEISHU_APP_ID: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_ID }}
-          IM_ALIGN_E2E_FEISHU_APP_SECRET: ${{ secrets.IM_ALIGN_E2E_FEISHU_APP_SECRET }}
-          IM_ALIGN_E2E_CHAT_ID: ${{ secrets.IM_ALIGN_E2E_CHAT_ID }}
+          E2E_BRIDGE_FEISHU_APP_ID: ${{ secrets.E2E_BRIDGE_FEISHU_APP_ID }}
+          E2E_BRIDGE_FEISHU_APP_SECRET: ${{ secrets.E2E_BRIDGE_FEISHU_APP_SECRET }}
+          E2E_BRIDGE_CHAT_ID: ${{ secrets.E2E_BRIDGE_CHAT_ID }}
         run: uv run --frozen python -m tests.e2e.im_integration tests/e2e/scenarios/todo-greenfield

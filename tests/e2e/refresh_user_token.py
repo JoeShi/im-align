@@ -18,8 +18,8 @@ from pathlib import Path
 
 APP_TOKEN_PATH = "/open-apis/auth/v3/app_access_token/internal"
 REFRESH_PATH = "/open-apis/authen/v1/refresh_access_token"
-REFRESH_SECRET_NAME = "IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN"
-ACCESS_TOKEN_ENV_NAME = "IM_ALIGN_E2E_USER_ACCESS_TOKEN"
+REFRESH_SECRET_NAME = "E2E_SIMULATOR_USER_REFRESH_TOKEN"
+ACCESS_TOKEN_ENV_NAME = "E2E_SIMULATOR_USER_ACCESS_TOKEN"
 
 
 class TokenRefreshError(RuntimeError):
@@ -200,10 +200,10 @@ def append_github_env(path: str, access_token: str) -> None:
 def run_ci_refresh(env=None, *, urlopen=None, run=subprocess.run) -> None:
     env = env if env is not None else os.environ
     refreshed = refresh_user_token(
-        _required(env, "IM_ALIGN_E2E_FEISHU_APP_ID"),
-        _required(env, "IM_ALIGN_E2E_FEISHU_APP_SECRET"),
+        _required(env, "E2E_BRIDGE_FEISHU_APP_ID"),
+        _required(env, "E2E_BRIDGE_FEISHU_APP_SECRET"),
         _required(env, REFRESH_SECRET_NAME),
-        base_url=env.get("IM_ALIGN_E2E_FEISHU_BASE_URL", "https://open.feishu.cn"),
+        base_url=env.get("E2E_BRIDGE_FEISHU_BASE_URL", "https://open.feishu.cn"),
         urlopen=urlopen,
     )
     # Generated values are not repository secrets yet. Register them with the
@@ -217,7 +217,7 @@ def run_ci_refresh(env=None, *, urlopen=None, run=subprocess.run) -> None:
     rotate_github_secret(
         refreshed.refresh_token,
         _required(env, "GITHUB_REPOSITORY"),
-        _required(env, "IM_ALIGN_E2E_GITHUB_SECRETS_PAT"),
+        _required(env, "E2E_SIMULATOR_GITHUB_SECRETS_PAT"),
         run=run,
     )
     append_github_env(

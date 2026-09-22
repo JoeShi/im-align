@@ -1,9 +1,0 @@
-{
-  "scopes": {
-    "tenant": [
-      "im:message.group_msg",
-      "im:message:send_as_bot"
-    ],
-    "user": []
-  }
-}

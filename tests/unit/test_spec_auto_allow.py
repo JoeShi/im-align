@@ -120,9 +120,17 @@ class SpecRootConfigTests(unittest.TestCase):
 
             self.assertEqual(loaded["agent"]["spec_root"], "repo/specs")
 
-    def test_unset_spec_root_uses_built_in_default(self):
+    def test_unset_spec_root_uses_skill_default(self):
         with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
             write_user_config(user_config())
+
+            loaded = config.load(cwd)
+
+            self.assertEqual(loaded["agent"]["spec_root"], "docs/adr")
+
+    def test_unset_spec_root_keeps_built_in_default_for_unmapped_skill(self):
+        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
+            write_user_config(user_config({"agent": {"skill": "custom-skill"}}))
 
             loaded = config.load(cwd)
 

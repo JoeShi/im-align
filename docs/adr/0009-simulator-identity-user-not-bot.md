@@ -1,6 +1,6 @@
 # Feishu-Touching Test Layers Must Simulate the User as a User, Not a Bot
 
-Status: accepted.
+Status: accepted. Amended by ADR-0010: the `bot` Participant Mode is no longer selectable — ADR-0010 removed it together with the ADR-0006 allowlist. The measurement facts below remain valid.
 
 The Backend Smoke and IM Integration layers need an automated actor that plays the human participant in a real Feishu/Lark Thread. ADR-0006 introduced a dedicated simulator app ("customer bot") and an allowlist so its messages could drive Turns like a human's. On 2026-09-16, real-machine Backend Smoke runs (bot mode, run `run-1789557146-1be2f8` and predecessors) measured that this does not work end to end: the Bridge never receives the simulator bot's messages, so the simulated user can answer but can never drive a Turn. Decision: until the platform delivers bot-originated messages to a bot's event stream, the User Simulator and the Thread verifier in L2/L3 automation must run under a **user identity** (`user_access_token`); the `bot` Participant Mode stays implemented but is recorded as blocked by a platform delivery constraint, not by im-align code.
 

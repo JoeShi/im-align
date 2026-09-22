@@ -1,7 +1,6 @@
-"""OpenAPIThreadTransport bot mode: tenant token exchange, caching, refresh.
+"""OpenAPIThreadTransport: user-token polling over the OpenAPI seams.
 
-Fake urlopen routes by URL so no network is touched; clock is injected to
-exercise the refresh window.
+Fake urlopen routes by URL so no network is touched.
 """
 
 import io
@@ -45,14 +44,6 @@ class FakeUrlopen:
         if "container_id_type=chat" in url:
             return FakeResponse({"code": 0, "data": {"items": [], "has_more": False}})
         return FakeResponse({"code": 0, "data": {"message_id": "om_new"}})
-
-
-class FakeClock:
-    def __init__(self):
-        self.now = 1000.0
-
-    def __call__(self):
-        return self.now
 
 
 class FakeHttpConnection:
@@ -138,99 +129,21 @@ class PostJsonWithDeadlineTests(unittest.TestCase):
             )
 
 
-class BotModeTests(unittest.TestCase):
-    def make_transport(self, urlopen=None, clock=None):
+class UserTokenTransportTests(unittest.TestCase):
+    def make_transport(self, urlopen=None):
         return OpenAPIThreadTransport(
-            "",
+            "u-token",
             "oc_chat",
-            app_id="cli_bot",
-            app_secret="secret",
             urlopen=urlopen,
-            clock=clock,
         )
 
-    def test_identity_conflict_raises(self):
-        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
-            OpenAPIThreadTransport("u-token", "oc_chat", app_id="cli_bot", app_secret="secret")
-
     def test_missing_identity_raises(self):
-        with self.assertRaisesRegex(ValueError, "either"):
+        with self.assertRaisesRegex(ValueError, "user_access_token"):
             OpenAPIThreadTransport("", "oc_chat")
-
-    def test_token_exchanged_once_and_cached(self):
-        fake = FakeUrlopen()
-        transport = self.make_transport(urlopen=fake, clock=FakeClock())
-
-        transport.poll()
-        transport.poll()
-        transport.post_reply("hello")
-
-        self.assertEqual(fake.token_calls, 1)
-        self.assertTrue(fake.api_calls)
-        for _, auth in fake.api_calls:
-            self.assertEqual(auth, "Bearer t-1")
-
-    def test_token_refreshed_near_expiry(self):
-        fake = FakeUrlopen()
-        clock = FakeClock()
-        transport = self.make_transport(urlopen=fake, clock=clock)
-
-        transport.poll()
-        self.assertEqual(fake.token_calls, 1)
-
-        # Still valid: 3600s TTL minus the 300s margin.
-        clock.now += 3400
-        transport.poll()
-        self.assertEqual(fake.token_calls, 2)
-        _, auth = fake.api_calls[-1]
-        self.assertEqual(auth, "Bearer t-2")
-
-    def test_token_not_refreshed_inside_margin(self):
-        fake = FakeUrlopen()
-        clock = FakeClock()
-        transport = self.make_transport(urlopen=fake, clock=clock)
-
-        transport.poll()
-        clock.now += 100  # well inside the refresh margin
-        transport.poll()
-        self.assertEqual(fake.token_calls, 1)
-
-    def test_accepts_expires_in_alias(self):
-        class ExpiresInFake(FakeUrlopen):
-            def __call__(self, req, timeout=None):
-                url = req.full_url
-                if "tenant_access_token/internal" in url:
-                    self.token_calls += 1
-                    return FakeResponse(
-                        {"code": 0, "tenant_access_token": "t-x", "expires_in": 7200}
-                    )
-                self.api_calls.append((url, req.get_header("Authorization") or ""))
-                return FakeResponse({"code": 0, "data": {"items": [], "has_more": False}})
-
-        fake = ExpiresInFake()
-        clock = FakeClock()
-        transport = self.make_transport(urlopen=fake, clock=clock)
-        transport.poll()
-        clock.now += 7000  # 7200 - 7000 = 200s < 300s margin
-        transport.poll()
-        self.assertEqual(fake.token_calls, 2)
-
-    def test_token_exchange_failure_raises(self):
-        class FailingFake(FakeUrlopen):
-            def __call__(self, req, timeout=None):
-                if "tenant_access_token/internal" in req.full_url:
-                    return FakeResponse({"code": 999, "msg": "bad app"})
-                return super().__call__(req, timeout)
-
-        transport = self.make_transport(urlopen=FailingFake(), clock=FakeClock())
-        with self.assertRaisesRegex(RuntimeError, "tenant_access_token"):
-            transport.poll()
 
     def test_http_error_surfaces_feishu_error_code_and_message(self):
         class PermissionDeniedFake(FakeUrlopen):
             def __call__(self, req, timeout=None):
-                if "tenant_access_token/internal" in req.full_url:
-                    return super().__call__(req, timeout)
                 raise urllib.error.HTTPError(
                     req.full_url,
                     400,
@@ -241,9 +154,7 @@ class BotModeTests(unittest.TestCase):
                     ),
                 )
 
-        transport = self.make_transport(
-            urlopen=PermissionDeniedFake(), clock=FakeClock()
-        )
+        transport = self.make_transport(urlopen=PermissionDeniedFake())
 
         with self.assertRaisesRegex(
             RuntimeError,
@@ -251,11 +162,9 @@ class BotModeTests(unittest.TestCase):
         ):
             transport.poll()
 
-    def test_user_mode_never_exchanges_token(self):
+    def test_poll_sends_user_token(self):
         fake = FakeUrlopen()
-        transport = OpenAPIThreadTransport(
-            "u-token", "oc_chat", urlopen=fake, clock=FakeClock()
-        )
+        transport = self.make_transport(urlopen=fake)
         transport.poll()
         self.assertEqual(fake.token_calls, 0)
         _, auth = fake.api_calls[-1]

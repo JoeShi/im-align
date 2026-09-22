@@ -75,7 +75,6 @@ class SmokeDiagnostics:
                 except OSError as error:
                     self.error("archive", error)
         self.write_json("transcript.json", {
-            "participant_mode": self.result.participant_mode,
             "thread_messages": self.transcript,
             "simulator": self.simulator,
         })

@@ -39,7 +39,6 @@ class EvaluatorState(TypedDict, total=False):
     run_id: str
     scenario: str
     backend: str
-    participant_mode: str
     evidence: str  # transcript export + artifact summary, built by the caller
     deterministic_assertions: dict
     dimensions: list  # llm_dimensions field names
@@ -122,7 +121,6 @@ def build_rubric(state: EvaluatorState) -> dict:
         "run_id": state["run_id"],
         "scenario": state["scenario"],
         "backend": state["backend"],
-        "participant_mode": state["participant_mode"],
         "verdict": state["verdict"],
         "deterministic_assertions": dict(state["deterministic_assertions"]),
         "llm_evaluation": dict(state["llm_evaluation"]),
@@ -148,7 +146,6 @@ def evaluate_run(
     run_id: str,
     scenario: str,
     backend: str,
-    participant_mode: str,
     evidence: str,
     deterministic_assertions: dict,
     dimensions: list,
@@ -159,7 +156,6 @@ def evaluate_run(
         "run_id": run_id,
         "scenario": scenario,
         "backend": backend,
-        "participant_mode": participant_mode,
         "evidence": evidence,
         "deterministic_assertions": dict(deterministic_assertions),
         "dimensions": list(dimensions),

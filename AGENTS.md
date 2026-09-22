@@ -76,7 +76,7 @@ When changing Session, ACP, Permission Policy, completion detection, or the Feis
 
 - App Secret may exist only in user-level `~/.config/im-align/config.yaml`, which must have mode `0600`; repository `.im-align.yaml` must not contain credentials.
 - The Permission Policy allows read/search/fetch/think once, allows an edit once only when all resolved targets are files inside `agent.spec_root`, and rejects execute/delete/move/unknown or unverifiable operations (ADR-0005).
-- Bot messages in the Thread are discarded by default. `im.extra_participant_open_ids` is an explicit allowlist (ADR-0006) whose bots drive Turns like participants; it stays empty in production and must point only at a dedicated CI test app.
+- Bot messages in the Thread are discarded unconditionally: the platform never delivers bot-originated messages to the Bridge event stream (ADR-0009), and the ADR-0006 allowlist was removed with the harness bot mode (ADR-0010).
 - Startup must reject argv containing dangerous parameters such as `bypass_permissions`, `--yolo`, `trust-all-tools`, or `trust-tools`. kiro-cli short option `-a` cannot be blocked by substring safely, so host-level `allowedTools` in `~/.kiro/agents/*.json` remains the backstop.
 - Do not accept repository URLs and do not clone; the runtime scope is the cwd git worktree at launch.
 - Thread messages never stop a Session. Lifecycle control belongs to the local `bridge.py stop` command (ADR-0007).

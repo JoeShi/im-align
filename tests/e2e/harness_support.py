@@ -9,9 +9,10 @@ except ImportError:  # Direct script entry for IM Integration.
 
 
 _HARNESS_ONLY_ENV_PREFIXES = (
-    "IM_ALIGN_E2E_",
-    "SIMULATOR_LLM_",
-    "EVALUATOR_LLM_",
+    "E2E_BRIDGE_",
+    "E2E_SIMULATOR_",
+    "E2E_EVALUATOR_",
+    "E2E_RUNS_DIR",
 )
 
 

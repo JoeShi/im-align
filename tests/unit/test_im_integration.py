@@ -55,26 +55,6 @@ class WriteUserConfigTests(unittest.TestCase):
         args = data["commands"]["e2e-fake"]["args"]
         self.assertTrue(all(Path(a).is_absolute() for a in args), "backend argv must be absolute")
 
-    def test_writes_selected_participant_allowlist(self):
-        import yaml
-
-        scenario = load_scenario(SCENARIO_DIR)
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_user_config(
-                Path(tmp),
-                {"app_id": "cli_x", "app_secret": "secret"},
-                scenario,
-                extra_participant_open_ids=["ou_simulator"],
-            )
-            data = yaml.safe_load(
-                (Path(tmp) / "im-align" / "config.yaml").read_text(encoding="utf-8")
-            )
-
-        self.assertEqual(
-            data["defaults"]["im"]["extra_participant_open_ids"],
-            ["ou_simulator"],
-        )
-
     def test_writes_turn_timeout_for_backend_smoke(self):
         import yaml
 
@@ -115,9 +95,6 @@ class WriteUserConfigTests(unittest.TestCase):
 class ReactionVerifierTests(unittest.TestCase):
     def test_message_reaction_is_observed_as_ack(self):
         class StubVerifier(FeishuOpenAPIVerifier):
-            def _tenant_token(self):
-                return "t-bridge"
-
             def _request(self, method, path, body=None, token=""):
                 self.observed = (method, path, token)
                 return {
@@ -132,7 +109,7 @@ class ReactionVerifierTests(unittest.TestCase):
                     },
                 }
 
-        verifier = StubVerifier("cli_bridge", "secret")
+        verifier = StubVerifier(user_access_token="u-token")
 
         self.assertTrue(
             verifier.message_reaction_received("om_reply", "ou_bridge")
@@ -142,7 +119,7 @@ class ReactionVerifierTests(unittest.TestCase):
             (
                 "GET",
                 "/open-apis/im/v1/messages/om_reply/reactions?page_size=50",
-                "t-bridge",
+                "u-token",
             ),
         )
 
@@ -154,9 +131,6 @@ class ThreadContainerVerifierTests(unittest.TestCase):
         observed = []
 
         class StubVerifier(FeishuOpenAPIVerifier):
-            def _tenant_token(self):
-                return "t-sim"
-
             def _request(self, method, path, body=None, token=""):
                 observed.append(path)
                 if path.startswith("/open-apis/im/v1/messages/om_root"):
@@ -185,7 +159,7 @@ class ThreadContainerVerifierTests(unittest.TestCase):
                     },
                 }
 
-        verifier = StubVerifier("cli_sim", "secret", root_message_id="om_root")
+        verifier = StubVerifier(user_access_token="u-token", root_message_id="om_root")
 
         messages = verifier.messages_since("oc_chat", 1.5)
 
@@ -195,16 +169,17 @@ class ThreadContainerVerifierTests(unittest.TestCase):
         )
         self.assertFalse(any("container_id_type=chat" in p for p in observed))
 
-    def test_user_identity_never_exchanges_tenant_token(self):
-        class ExplodingVerifier(FeishuOpenAPIVerifier):
-            def _tenant_token(self):
-                raise AssertionError("tenant token must not be exchanged in as-user mode")
+    def test_user_identity_is_required(self):
+        with self.assertRaisesRegex(ValueError, "user_access_token"):
+            FeishuOpenAPIVerifier()
 
+    def test_user_identity_sends_user_token(self):
+        class StubVerifier(FeishuOpenAPIVerifier):
             def _request(self, method, path, body=None, token=""):
                 self.observed_token = token
                 return {"code": 0, "data": {"items": [], "has_more": False}}
 
-        verifier = ExplodingVerifier(user_access_token="u-token")
+        verifier = StubVerifier(user_access_token="u-token")
 
         self.assertEqual(verifier.messages_since("oc_chat", 0.0), [])
         self.assertEqual(verifier.observed_token, "u-token")
@@ -414,13 +389,13 @@ class GitAssertionTests(unittest.TestCase):
 
 class CredentialTests(unittest.TestCase):
     FULL_ENV = {
-        "IM_ALIGN_E2E_FEISHU_APP_ID": "cli_x",
-        "IM_ALIGN_E2E_FEISHU_APP_SECRET": "secret",
-        "IM_ALIGN_E2E_CHAT_ID": "oc_x",
+        "E2E_BRIDGE_FEISHU_APP_ID": "cli_x",
+        "E2E_BRIDGE_FEISHU_APP_SECRET": "secret",
+        "E2E_BRIDGE_CHAT_ID": "oc_x",
     }
 
     def test_missing_credentials_skip(self):
-        with self.assertRaisesRegex(IntegrationSkip, "IM_ALIGN_E2E_FEISHU_APP_ID"):
+        with self.assertRaisesRegex(IntegrationSkip, "E2E_BRIDGE_FEISHU_APP_ID"):
             feishu_credentials({})
 
     def test_credentials_read_from_env(self):
@@ -429,7 +404,7 @@ class CredentialTests(unittest.TestCase):
         self.assertNotIn("initiator_open_id", creds)
 
     def _env_without_chat_id(self):
-        return {k: v for k, v in self.FULL_ENV.items() if k != "IM_ALIGN_E2E_CHAT_ID"}
+        return {k: v for k, v in self.FULL_ENV.items() if k != "E2E_BRIDGE_CHAT_ID"}
 
     def test_chat_id_falls_back_to_repo_config(self):
         with tempfile.TemporaryDirectory() as tmp:

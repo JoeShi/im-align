@@ -63,7 +63,7 @@ The single-scenario layer: one real Agent Backend plus an LLM-driven User Simula
 _Avoid_: sanity check, canary
 
 **Full e2e**:
-The exhaustive layer: every supported Agent Backend in the supported `as-user` Participant Mode across all Scenarios, greenfield and brownfield, with the same schema as Backend Smoke. The blocked `bot` mode remains an optional platform diagnostic. Run on demand, not in CI.
+The exhaustive layer: every supported Agent Backend across all Scenarios, greenfield and brownfield, with the same schema as Backend Smoke. The User Simulator always runs under the test-user identity (ADR-0009/ADR-0010). Run on demand, not in CI.
 _Avoid_: regression suite, UAT
 
 **Scenario**:
@@ -75,5 +75,5 @@ The harness component that plays the customer in Backend Smoke and Full e2e: it 
 _Avoid_: fake user, mock user, judge
 
 **Participant Mode**:
-The identity used by the User Simulator for one Backend Smoke or Full e2e run. `as-user` is the supported mode. `bot` remains selectable only to re-probe the platform delivery constraint recorded by ADR-0009; it is expected to fail acknowledgement and Turn-driving assertions until re-enabled.
+The identity used by the User Simulator for one Backend Smoke or Full e2e run. `as-user` (the dedicated test user's `user_access_token`) is the only mode: ADR-0009 measured that the platform never delivers bot-originated messages to the Bridge event stream, so a bot participant can never drive a Turn and ADR-0010 removed the harness bot mode and the product bot allowlist.
 _Avoid_: simulator identity, auth mode

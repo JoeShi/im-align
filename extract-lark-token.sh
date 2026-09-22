@@ -2,8 +2,8 @@
 # Extract the Feishu/Lark user token from the local lark-cli credential store.
 # Prints the token to stdout so it can be captured into an environment variable:
 #
-#   IM_ALIGN_E2E_USER_ACCESS_TOKEN="$(./extract-lark-token.sh)"
-#   IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN="$(./extract-lark-token.sh --token refresh)"
+#   E2E_SIMULATOR_USER_ACCESS_TOKEN="$(./extract-lark-token.sh)"
+#   E2E_SIMULATOR_USER_REFRESH_TOKEN="$(./extract-lark-token.sh --token refresh)"
 #
 # The store format (macOS, measured 2026-09-16) is documented in
 # references/feishu-setup.md ("Extracting The Local Token From The lark-cli

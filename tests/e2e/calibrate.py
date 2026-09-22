@@ -10,7 +10,7 @@ trust in it; the report lists such dimensions as suggestions.
 Entry:
     python -m tests.e2e.calibrate --runs-dir <dir> --rounds 5 [--threshold 0.8]
 
-LLM access comes only from EVALUATOR_LLM_* environment variables; a missing
+LLM access comes only from E2E_EVALUATOR_LLM_* environment variables; a missing
 configuration skips with an explicit report.
 """
 
@@ -39,7 +39,6 @@ def load_run_dir(run_dir: Path) -> dict:
         "run_id": rubric.get("run_id", run_dir.name),
         "scenario": rubric.get("scenario", ""),
         "backend": rubric.get("backend", ""),
-        "participant_mode": rubric.get("participant_mode", "as-user"),
         "dimensions": list((rubric.get("llm_evaluation") or {}).keys()),
         "deterministic_assertions": rubric.get("deterministic_assertions") or {"archived": True},
         "evidence": json.dumps(transcript, ensure_ascii=False),
@@ -119,7 +118,6 @@ def calibrate(runs_dir, rounds: int, llm, threshold: float = DEFAULT_THRESHOLD) 
                 run_id=archived["run_id"],
                 scenario=archived["scenario"],
                 backend=archived["backend"],
-                participant_mode=archived["participant_mode"],
                 evidence=archived["evidence"],
                 deterministic_assertions=archived["deterministic_assertions"],
                 dimensions=archived["dimensions"],
@@ -159,7 +157,7 @@ def main(argv=None) -> int:
     llm = evaluator_llm_from_env(os.environ)
     if llm is None:
         print(
-            "SKIP: missing EVALUATOR_LLM_BASE_URL / EVALUATOR_LLM_API_KEY / EVALUATOR_LLM_MODEL",
+            "SKIP: missing E2E_EVALUATOR_LLM_BASE_URL / E2E_EVALUATOR_LLM_API_KEY / E2E_EVALUATOR_LLM_MODEL",
             file=sys.stderr,
         )
         return 0

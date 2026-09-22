@@ -1,8 +1,11 @@
-"""Participant identity adapters for Feishu-touching harness layers.
+"""Participant identity adapter for Feishu-touching harness layers.
 
-Each run selects one explicit identity. Adapters hide identity-specific
-credentials and expose only the Bridge allowlist contribution plus the Thread
-transport and verifier used by the scripted or LLM-driven Participant.
+The User Simulator always runs under the dedicated test-user identity: the
+platform never delivers bot-originated messages to the Bridge event stream
+(ADR-0009), so a bot participant can never drive a Turn and ADR-0010 removed
+the bot mode entirely. The adapter hides identity-specific credentials and
+exposes only the Thread transport and verifier used by the scripted or
+LLM-driven Participant.
 """
 
 from dataclasses import dataclass
@@ -14,7 +17,7 @@ from .im_integration import FeishuOpenAPIVerifier
 
 
 class ParticipantConfigError(ValueError):
-    """The selected participant mode is missing required configuration."""
+    """The participant identity is missing required configuration."""
 
 
 def _required(env, name: str) -> str:
@@ -93,11 +96,6 @@ class AsUserParticipantAdapter:
 
     _user_access_token: str
     _bridge_bot_open_id: str
-    mode: str = "as-user"
-
-    @property
-    def extra_participant_open_ids(self) -> list:
-        return []
 
     @property
     def bridge_bot_open_id(self) -> str:
@@ -113,82 +111,24 @@ class AsUserParticipantAdapter:
         )
 
     def open_verifier(self, root_message_id: str = ""):
-        """Read-only Thread checks under the user identity (as-user mode)."""
+        """Read-only Thread checks under the user identity."""
         return FeishuOpenAPIVerifier(
             user_access_token=self._user_access_token,
             root_message_id=root_message_id,
         )
 
 
-@dataclass(frozen=True)
-class BotParticipantAdapter:
-    """User Simulator identity backed by a dedicated customer bot app."""
-
-    _app_id: str
-    _app_secret: str
-    _simulator_open_id: str
-    _bridge_bot_open_id: str
-    mode: str = "bot"
-
-    @property
-    def extra_participant_open_ids(self) -> list:
-        return [self._simulator_open_id]
-
-    @property
-    def bridge_bot_open_id(self) -> str:
-        return self._bridge_bot_open_id
-
-    def open_thread(self, chat_id: str, root_message_id: str = "", **transport_options):
-        return OpenAPIThreadTransport(
-            chat_id=chat_id,
-            root_message_id=root_message_id,
-            app_id=self._app_id,
-            app_secret=self._app_secret,
-            mention_open_id=self._bridge_bot_open_id,
-            **transport_options,
-        )
-
-    def open_verifier(self, root_message_id: str = ""):
-        """Read-only Thread checks under the dedicated simulator app (bot mode).
-
-        The simulator app carries im:message.group_msg; the Bridge app does
-        not, so the Bridge credentials can never serve as the verifier.
-        """
-        return FeishuOpenAPIVerifier(
-            app_id=self._app_id,
-            app_secret=self._app_secret,
-            root_message_id=root_message_id,
-        )
-
-
-def participant_from_env(mode: str, env, urlopen=None):
-    """Build the explicitly selected Participant Adapter from environment data."""
-    if mode not in ("as-user", "bot"):
-        raise ParticipantConfigError(f"unsupported participant mode: {mode}")
+def participant_from_env(env, urlopen=None):
+    """Build the as-user Participant Adapter from environment data."""
     urlopen = urlopen or urllib.request.urlopen
     bridge_bot_open_id = _configured_or_resolved_open_id(
         env,
-        "IM_ALIGN_E2E_BRIDGE_BOT_OPEN_ID",
-        "IM_ALIGN_E2E_FEISHU_APP_ID",
-        "IM_ALIGN_E2E_FEISHU_APP_SECRET",
+        "E2E_BRIDGE_BOT_OPEN_ID",
+        "E2E_BRIDGE_FEISHU_APP_ID",
+        "E2E_BRIDGE_FEISHU_APP_SECRET",
         urlopen,
     )
-    if mode == "as-user":
-        return AsUserParticipantAdapter(
-            _user_access_token=_required(env, "IM_ALIGN_E2E_USER_ACCESS_TOKEN"),
-            _bridge_bot_open_id=bridge_bot_open_id,
-        )
-    if mode == "bot":
-        return BotParticipantAdapter(
-            _app_id=_required(env, "IM_ALIGN_E2E_SIMULATOR_APP_ID"),
-            _app_secret=_required(env, "IM_ALIGN_E2E_SIMULATOR_APP_SECRET"),
-            _simulator_open_id=_configured_or_resolved_open_id(
-                env,
-                "IM_ALIGN_E2E_SIMULATOR_OPEN_ID",
-                "IM_ALIGN_E2E_SIMULATOR_APP_ID",
-                "IM_ALIGN_E2E_SIMULATOR_APP_SECRET",
-                urlopen,
-            ),
-            _bridge_bot_open_id=bridge_bot_open_id,
-        )
-    raise AssertionError("unreachable participant mode")
+    return AsUserParticipantAdapter(
+        _user_access_token=_required(env, "E2E_SIMULATOR_USER_ACCESS_TOKEN"),
+        _bridge_bot_open_id=bridge_bot_open_id,
+    )

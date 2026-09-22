@@ -106,7 +106,7 @@ class ConfigLoadTests(unittest.TestCase):
 
             self.assertEqual(
                 loaded["im"],
-                {"provider": "feishu", "type": "feishu", "chat_id": "oc_repo", "extra_participant_open_ids": []},
+                {"provider": "feishu", "type": "feishu", "chat_id": "oc_repo"},
             )
             self.assertEqual(
                 loaded["agent"],
@@ -139,7 +139,7 @@ class ConfigLoadTests(unittest.TestCase):
 
             self.assertEqual(
                 loaded["im"],
-                {"provider": "feishu", "type": "feishu", "chat_id": "oc_cli", "extra_participant_open_ids": []},
+                {"provider": "feishu", "type": "feishu", "chat_id": "oc_cli"},
             )
             self.assertEqual(loaded["agent"]["backend"], "opencode")
             self.assertEqual(loaded["agent"]["skill"], "grill-with-docs")
@@ -184,7 +184,7 @@ class ConfigLoadTests(unittest.TestCase):
 
             self.assertEqual(
                 loaded["im"],
-                {"provider": "intl", "type": "lark", "chat_id": "oc_lark", "extra_participant_open_ids": []},
+                {"provider": "intl", "type": "lark", "chat_id": "oc_lark"},
             )
             self.assertEqual(loaded["feishu_app_id"], "cli_lark")
             self.assertEqual(loaded["feishu_domain"], "larksuite")
@@ -312,7 +312,7 @@ class ConfigLoadTests(unittest.TestCase):
             )
 
             with (
-                mock.patch("builtins.input", side_effect=["", "", "", "", ""]),
+                mock.patch("builtins.input", side_effect=["", "", "", "", "", ""]),
                 mock.patch("getpass.getpass", return_value=""),
                 redirect_stdout(io.StringIO()),
             ):
@@ -324,7 +324,7 @@ class ConfigLoadTests(unittest.TestCase):
                 written["defaults"],
                 {
                     "im": {"provider": "feishu"},
-                    "agent": {"backend": "opencode", "spec_root": "docs/specs"},
+                    "agent": {"backend": "opencode", "skill": "grill-with-docs", "spec_root": "docs/adr"},
                 },
             )
             self.assertEqual(
@@ -350,7 +350,7 @@ class ConfigLoadTests(unittest.TestCase):
     def test_setup_can_create_custom_provider_key(self):
         with isolated_config_home():
             with (
-                mock.patch("builtins.input", side_effect=["work", "cli_work", "feishu", "oc_work", "opencode"]),
+                mock.patch("builtins.input", side_effect=["work", "cli_work", "feishu", "oc_work", "opencode", "grill-me"]),
                 mock.patch("getpass.getpass", return_value="secret"),
                 redirect_stdout(io.StringIO()),
             ):
@@ -370,7 +370,7 @@ class ConfigLoadTests(unittest.TestCase):
                     },
                     "defaults": {
                         "im": {"provider": "work"},
-                        "agent": {"backend": "opencode", "spec_root": "docs/specs"},
+                        "agent": {"backend": "opencode", "skill": "grill-me", "spec_root": "docs/specs"},
                     },
                 },
             )
@@ -697,7 +697,7 @@ class ConfigLoadTests(unittest.TestCase):
 
         self.assertEqual(record["backend"], "kiro-cli")
         self.assertEqual(record["command_alias"], "")
-        self.assertEqual(record["spec_root"], "docs/specs")
+        self.assertEqual(record["spec_root"], "docs/adr")
         self.assertEqual(
             record["agent_argv"],
             ["kiro-cli", "acp", "--agent-engine", "v3", "--auth-method", "cli"],
@@ -826,107 +826,6 @@ class ConfigLoadTests(unittest.TestCase):
 
             with self.assertRaisesRegex(config.ConfigError, "must have mode 0600"):
                 config.load(cwd)
-
-
-class ExtraParticipantConfigTests(unittest.TestCase):
-    def write_user_config(self, data, mode=0o600):
-        path = Path(config.user_config_path())
-        write_yaml(path, data, mode)
-        return path
-
-    def write_repo_config(self, cwd, data):
-        write_yaml(Path(cwd) / ".im-align.yaml", data)
-
-    def user_config(self, im_defaults=None):
-        return {
-            "providers": {
-                "feishu": {
-                    "type": "feishu",
-                    "app_id": "cli_test",
-                    "app_secret": "secret",
-                    "default_chat_id": "oc_user",
-                }
-            },
-            "defaults": {"im": im_defaults or {}},
-        }
-
-    def test_defaults_to_empty_list(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config())
-
-            loaded = config.load(cwd)
-
-            self.assertEqual(loaded["im"]["extra_participant_open_ids"], [])
-
-    def test_user_defaults_loads_allowlist(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(
-                self.user_config({"extra_participant_open_ids": ["ou_bot1", "ou_bot2"]})
-            )
-
-            loaded = config.load(cwd)
-
-            self.assertEqual(loaded["im"]["extra_participant_open_ids"], ["ou_bot1", "ou_bot2"])
-
-    def test_repo_level_overrides_user_default(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(
-                self.user_config({"extra_participant_open_ids": ["ou_user_bot"]})
-            )
-            self.write_repo_config(
-                cwd, {"im": {"extra_participant_open_ids": ["ou_repo_bot"]}}
-            )
-
-            loaded = config.load(cwd)
-
-            self.assertEqual(loaded["im"]["extra_participant_open_ids"], ["ou_repo_bot"])
-
-    def test_non_list_rejected(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"extra_participant_open_ids": "ou_bot"}))
-
-            with self.assertRaisesRegex(config.ConfigError, "array of strings"):
-                config.load(cwd)
-
-    def test_non_string_entry_rejected(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"extra_participant_open_ids": [123]}))
-
-            with self.assertRaisesRegex(config.ConfigError, "array of strings"):
-                config.load(cwd)
-
-    def test_entry_without_ou_prefix_rejected(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"extra_participant_open_ids": ["on_bot"]}))
-
-            with self.assertRaisesRegex(config.ConfigError, "ou_"):
-                config.load(cwd)
-
-    def test_empty_string_entry_rejected(self):
-        with isolated_config_home(), tempfile.TemporaryDirectory() as cwd:
-            self.write_user_config(self.user_config({"extra_participant_open_ids": [""]}))
-
-            with self.assertRaisesRegex(config.ConfigError, "ou_"):
-                config.load(cwd)
-
-    def test_validate_returns_fresh_list(self):
-        cfg = dict(config.DEFAULTS)
-        cfg.update(
-            {
-                "provider": "feishu",
-                "provider_type": "feishu",
-                "feishu_app_id": "cli_test",
-                "feishu_app_secret": "secret",
-                "feishu_domain": "feishu",
-                "chat_id": "oc_test",
-            }
-        )
-        cfg["extra_participant_open_ids"] = ["ou_bot"]
-
-        config.validate(cfg)
-        cfg["extra_participant_open_ids"].append("ou_mutated")
-
-        self.assertEqual(config.DEFAULTS["extra_participant_open_ids"], [])
 
 
 if __name__ == "__main__":

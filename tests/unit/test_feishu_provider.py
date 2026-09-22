@@ -1,4 +1,4 @@
-"""ADR-0006: allowlisted bot participants pass the Thread bot filter.
+"""FeishuProvider bot-message filter: bot senders are discarded unconditionally.
 
 Constructs the real FeishuProvider (client creation is offline, matching the
 construction smoke in tests/unit/test_config.py) and feeds synthetic
@@ -30,9 +30,9 @@ def make_message_event(sender_type="user", open_id="ou_human", event_id="evt-1",
     return SimpleNamespace(event=event, header=header)
 
 
-class BotParticipantFilterTests(unittest.TestCase):
-    def make_provider(self, extra_participants=()):
-        return FeishuProvider("cli_test", "secret", extra_participants=extra_participants)
+class BotMessageFilterTests(unittest.TestCase):
+    def make_provider(self):
+        return FeishuProvider("cli_test", "secret")
 
     def test_user_message_is_queued(self):
         provider = self.make_provider()
@@ -43,44 +43,15 @@ class BotParticipantFilterTests(unittest.TestCase):
         self.assertEqual(events[0].sender_open_id, "ou_human")
         self.assertEqual(events[0].text, "hello")
 
-    def test_bot_without_allowlist_is_discarded(self):
+    def test_bot_message_is_discarded_unconditionally(self):
         provider = self.make_provider()
         provider._on_message(make_message_event(sender_type="bot", open_id="ou_other_bot"))
 
         self.assertEqual(provider.poll_events(timeout=0.1), [])
 
-    def test_empty_allowlist_preserves_current_behavior(self):
-        provider = self.make_provider(extra_participants=[])
-        provider._on_message(make_message_event(sender_type="bot", open_id="ou_ci_bot"))
-
-        self.assertEqual(provider.poll_events(timeout=0.1), [])
-
-    def test_allowlisted_bot_is_queued_like_a_participant(self):
-        provider = self.make_provider(extra_participants=["ou_ci_bot"])
-        provider._on_message(make_message_event(sender_type="bot", open_id="ou_ci_bot"))
-
-        events = provider.poll_events(timeout=0.1)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].sender_open_id, "ou_ci_bot")
-        self.assertEqual(events[0].sender_type, "bot")
-
-    def test_non_allowlisted_bot_still_discarded_when_list_present(self):
-        provider = self.make_provider(extra_participants=["ou_ci_bot"])
-        provider._on_message(make_message_event(sender_type="bot", open_id="ou_other_bot"))
-
-        self.assertEqual(provider.poll_events(timeout=0.1), [])
-
-    def test_allowlist_does_not_affect_user_messages(self):
-        provider = self.make_provider(extra_participants=["ou_ci_bot"])
-        provider._on_message(make_message_event(sender_type="user", open_id="ou_human"))
-
-        events = provider.poll_events(timeout=0.1)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].sender_open_id, "ou_human")
-
-    def test_duplicate_event_id_dedup_still_applies_to_bots(self):
-        provider = self.make_provider(extra_participants=["ou_ci_bot"])
-        event = make_message_event(sender_type="bot", open_id="ou_ci_bot", event_id="evt-dup")
+    def test_duplicate_event_id_dedup_still_applies(self):
+        provider = self.make_provider()
+        event = make_message_event(event_id="evt-dup")
         provider._on_message(event)
         provider._on_message(event)
 

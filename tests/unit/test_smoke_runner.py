@@ -13,7 +13,6 @@ from tests.e2e.scenario import load_scenario
 from tests.e2e.smoke_runner import (
     backend_matrix,
     participant_round_trip_assertions,
-    participant_mode_matrix,
     run_guarded_simulator,
     run_archive_dir,
     run_simulator,
@@ -63,23 +62,10 @@ class BackendMatrixTests(unittest.TestCase):
             backend_matrix(self.scenario, "emacs")
 
 
-class ParticipantModeMatrixTests(unittest.TestCase):
-    def test_single_mode_stays_single(self):
-        self.assertEqual(participant_mode_matrix("as-user"), ["as-user"])
-        self.assertEqual(participant_mode_matrix("bot"), ["bot"])
-
-    def test_all_expands_both_modes(self):
-        self.assertEqual(participant_mode_matrix("all"), ["as-user", "bot"])
-
-    def test_unknown_mode_raises_skip(self):
-        with self.assertRaises(IntegrationSkip):
-            participant_mode_matrix("automatic")
-
-
 class RunsRootTests(unittest.TestCase):
     def test_env_override_wins(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(runs_root({"IM_ALIGN_E2E_RUNS_DIR": tmp}), Path(tmp))
+            self.assertEqual(runs_root({"E2E_RUNS_DIR": tmp}), Path(tmp))
 
     def test_default_uses_xdg_state_home(self):
         root = runs_root({"XDG_STATE_HOME": "/tmp/xdg-test"})
@@ -116,71 +102,55 @@ class RootMessageReadinessTests(unittest.TestCase):
 
 class SmokeCredentialsTests(unittest.TestCase):
     FEISHU = {
-        "IM_ALIGN_E2E_FEISHU_APP_ID": "cli_x",
-        "IM_ALIGN_E2E_FEISHU_APP_SECRET": "secret",
-        "IM_ALIGN_E2E_CHAT_ID": "oc_x",
+        "E2E_BRIDGE_FEISHU_APP_ID": "cli_x",
+        "E2E_BRIDGE_FEISHU_APP_SECRET": "secret",
+        "E2E_BRIDGE_CHAT_ID": "oc_x",
     }
     LLM = {
-        "SIMULATOR_LLM_BASE_URL": "https://llm.example",
-        "SIMULATOR_LLM_API_KEY": "k",
-        "SIMULATOR_LLM_MODEL": "m",
-        "EVALUATOR_LLM_BASE_URL": "https://llm.example",
-        "EVALUATOR_LLM_API_KEY": "k",
-        "EVALUATOR_LLM_MODEL": "m",
+        "E2E_SIMULATOR_LLM_BASE_URL": "https://llm.example",
+        "E2E_SIMULATOR_LLM_API_KEY": "k",
+        "E2E_SIMULATOR_LLM_MODEL": "m",
+        "E2E_EVALUATOR_LLM_BASE_URL": "https://llm.example",
+        "E2E_EVALUATOR_LLM_API_KEY": "k",
+        "E2E_EVALUATOR_LLM_MODEL": "m",
     }
     USER_MODE = {
-        "IM_ALIGN_E2E_BRIDGE_BOT_OPEN_ID": "ou_bridge",
-        "IM_ALIGN_E2E_USER_ACCESS_TOKEN": "u-token",
-    }
-    BOT_MODE = {
-        "IM_ALIGN_E2E_BRIDGE_BOT_OPEN_ID": "ou_bridge",
-        "IM_ALIGN_E2E_SIMULATOR_APP_ID": "cli_bot",
-        "IM_ALIGN_E2E_SIMULATOR_APP_SECRET": "bot-secret",
-        "IM_ALIGN_E2E_SIMULATOR_OPEN_ID": "ou_simulator",
+        "E2E_BRIDGE_BOT_OPEN_ID": "ou_bridge",
+        "E2E_SIMULATOR_USER_ACCESS_TOKEN": "u-token",
     }
 
-    def _env(self, *modes):
+    def _env(self):
         env = dict(self.FEISHU)
         env.update(self.LLM)
-        for mode in modes:
-            env.update(mode)
+        env.update(self.USER_MODE)
         return env
 
     def test_user_token_mode(self):
-        creds = smoke_credentials(self._env(self.USER_MODE), "as-user")
-        self.assertEqual(creds["participant"].mode, "as-user")
+        creds = smoke_credentials(self._env())
+        self.assertEqual(creds["participant"].bridge_bot_open_id, "ou_bridge")
 
-    def test_bot_mode(self):
-        creds = smoke_credentials(self._env(self.BOT_MODE), "bot")
-        self.assertEqual(creds["participant"].mode, "bot")
-        self.assertEqual(
-            creds["participant"].extra_participant_open_ids,
-            ["ou_simulator"],
-        )
-
-    def test_both_identity_sets_can_coexist_when_mode_is_explicit(self):
-        env = self._env(self.USER_MODE, self.BOT_MODE)
-        self.assertEqual(smoke_credentials(env, "as-user")["participant"].mode, "as-user")
-        self.assertEqual(smoke_credentials(env, "bot")["participant"].mode, "bot")
-
-    def test_selected_mode_reports_its_missing_identity(self):
+    def test_missing_user_token_reports_skip(self):
         with self.assertRaisesRegex(IntegrationSkip, "USER_ACCESS_TOKEN"):
             smoke_credentials(
-                self._env({"IM_ALIGN_E2E_BRIDGE_BOT_OPEN_ID": "ou_bridge"}),
-                "as-user",
+                self._env_without_user_token(),
             )
+
+    def _env_without_user_token(self):
+        env = self._env()
+        del env["E2E_SIMULATOR_USER_ACCESS_TOKEN"]
+        return env
 
     def test_missing_feishu_credentials_reported(self):
         env = dict(self.USER_MODE)
         env.update(self.LLM)
         with self.assertRaises(IntegrationSkip):
-            smoke_credentials(env, "as-user")
+            smoke_credentials(env)
 
     def test_missing_llm_reported(self):
-        env = self._env(self.USER_MODE)
-        del env["EVALUATOR_LLM_BASE_URL"]
+        env = self._env()
+        del env["E2E_EVALUATOR_LLM_BASE_URL"]
         with self.assertRaisesRegex(IntegrationSkip, "EVALUATOR_LLM"):
-            smoke_credentials(env, "as-user")
+            smoke_credentials(env)
 
 
 class SummarizeTests(unittest.TestCase):

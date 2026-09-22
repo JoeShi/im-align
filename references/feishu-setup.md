@@ -10,12 +10,10 @@ v1 uses a Feishu/Lark long connection to receive message events. No public callb
 4. Create and publish a version, then add the bot to the group used for Alignment.
 5. Get the group `chat_id` (`oc_...`) and run Bridge `setup` to save App ID/App Secret and the default group.
 
-For the blocked Backend Smoke/Full e2e `bot` diagnostic, create a separate
-customer-simulator app and batch-import `lark-e2e-simulator-scopes.json` into
-that app. Publish a new version and add its bot to the dedicated test group.
-The production Bridge app does not need the simulator's broad group-history
-read scope. Supported automation uses the test user's OAuth access token
-instead (ADR-0009).
+Supported automation uses the test user's OAuth access token (ADR-0009/ADR-0010):
+historically a dedicated customer-simulator bot app was tried for the Backend
+Smoke User Simulator, but the platform never delivered its messages to the
+Bridge event stream, so both the harness bot mode and that app are gone.
 
 ## Scope Usage
 
@@ -27,22 +25,16 @@ instead (ADR-0009).
 - `im:chat:read`: read group information.
 - `contact:contact.base:readonly`: display participant names.
 
-The dedicated e2e simulator app uses a separate, test-only scope set:
-
-- `im:message.group_msg`: poll the dedicated test group's message history so
-  the simulator can observe Agent questions.
-- `im:message:send_as_bot`: reply in the Alignment Thread as the simulator bot.
-
 ## Test User OAuth And CI Rotation
 
-Supported Feishu-touching automation uses a dedicated test user. Complete one interactive OAuth grant for that user under the same `IM_ALIGN_E2E_FEISHU_APP_ID` used by the workflow, with the message-history, reply, and reaction permissions needed by the harness. Obtain both the access token and refresh token through the authorized CLI's supported credential export or the app's OAuth callback handling; do not print tokens or copy encrypted credential-store files into the repository.
+Supported Feishu-touching automation uses a dedicated test user. Complete one interactive OAuth grant for that user under the same `E2E_BRIDGE_FEISHU_APP_ID` used by the workflow, with the message-history, reply, and reaction permissions needed by the harness. Obtain both the access token and refresh token through the authorized CLI's supported credential export or the app's OAuth callback handling; do not print tokens or copy encrypted credential-store files into the repository.
 
-Local runs export the fresh access token as `IM_ALIGN_E2E_USER_ACCESS_TOKEN`.
+Local runs export the fresh access token as `E2E_SIMULATOR_USER_ACCESS_TOKEN`.
 
 ### Extracting The Local Token From The lark-cli Credential Store
 
 The repository ships `extract-lark-token.sh`, which automates the recipe below
-against the local store (`IM_ALIGN_E2E_USER_ACCESS_TOKEN="$(./extract-lark-token.sh)"`,
+against the local store (`E2E_SIMULATOR_USER_ACCESS_TOKEN="$(./extract-lark-token.sh)"`,
 `--token refresh` for the refresh token, `--list` to inspect expiry times).
 
 When the interactive grant was completed with lark-cli, the resulting tokens are kept in its local credential store instead of needing a new OAuth round trip. On macOS the store lives at `~/Library/Application Support/lark-cli/` and contains:
@@ -65,22 +57,22 @@ print(data["accessToken"])  # or data["refreshToken"] for CI seeding
 EOF
 ```
 
-Assign the output directly to `IM_ALIGN_E2E_USER_ACCESS_TOKEN` (or paste the refresh token into the GitHub secret). Never commit the store files, echo the tokens into a Thread, or archive them with run artifacts. The CI rotation job consumes `IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN`; the local access-token extraction above is only needed when running L2/L3 manually.
+Assign the output directly to `E2E_SIMULATOR_USER_ACCESS_TOKEN` (or paste the refresh token into the GitHub secret). Never commit the store files, echo the tokens into a Thread, or archive them with run artifacts. The CI rotation job consumes `E2E_SIMULATOR_USER_REFRESH_TOKEN`; the local access-token extraction above is only needed when running L2/L3 manually.
 
 CI instead stores:
 
-- `IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN`: the current rotating refresh token;
-- `IM_ALIGN_E2E_GITHUB_SECRETS_PAT`: a fine-grained GitHub PAT limited to this repository with **Secrets: write** permission.
+- `E2E_SIMULATOR_USER_REFRESH_TOKEN`: the current rotating refresh token;
+- `E2E_SIMULATOR_GITHUB_SECRETS_PAT`: a fine-grained GitHub PAT limited to this repository with **Secrets: write** permission.
 
 Before every serialized Feishu job, `tests/e2e/refresh_user_token.py` obtains an app access token, exchanges the refresh token for a fresh user access token, registers both generated values with the Actions log masker, and immediately sends the returned replacement refresh token to `gh secret set` over stdin. Secret persistence is retried with bounded backoff and must succeed before the short-lived access token is written to the current job's `GITHUB_ENV`. Feishu invalidates a refresh token after rotation, so both workflows keep refresh and test execution inside `im-align-feishu-single-session`; parallel refreshes would consume the same token and strand one run. The default workflow `GITHUB_TOKEN` cannot update repository Actions secrets and is not a substitute for the restricted PAT.
 
-Refresh tokens also expire (approximately 30 days). If CI has not run within that window, refresh returns an expiry error, or GitHub secret persistence exhausts all retries after a successful Feishu exchange, repeat the interactive grant and replace `IM_ALIGN_E2E_FEISHU_USER_REFRESH_TOKEN` manually. Never persist either user token in Bridge configuration, Session state, logs, or transcript archives.
+Refresh tokens also expire (approximately 30 days). If CI has not run within that window, refresh returns an expiry error, or GitHub secret persistence exhausts all retries after a successful Feishu exchange, repeat the interactive grant and replace `E2E_SIMULATOR_USER_REFRESH_TOKEN` manually. Never persist either user token in Bridge configuration, Session state, logs, or transcript archives.
 
 ## Known Delivery Limit
 
 With only `im:message.group_at_msg:readonly`, ordinary Thread replies that do not mention the bot are not delivered to the Bridge. Participants must mention the bot when replying in the Thread. If the tenant permits the sensitive scope for receiving all group-chat messages, this limitation can be removed; the code supports both event shapes.
 
-The platform also never delivered messages sent by other bots to the Bridge's `im.message.receive_v1` stream in the 2026-09-16 probe, even when they mentioned the Bridge bot. The Bridge-side allowlist can filter only events the platform delivers. Therefore `bot` remains a selectable diagnostic, but supported L2/L3/L4 automation posts and verifies with `IM_ALIGN_E2E_USER_ACCESS_TOKEN` (ADR-0009). Do not infer that adding `im:message.group_at_msg.include_bot:readonly` fixes this boundary; re-enable bot mode only after a direct long-connection probe observes the event and the bot Backend Smoke tuple is green.
+The platform also never delivered messages sent by other bots to the Bridge's `im.message.receive_v1` stream in the 2026-09-16 probe, even when they mentioned the Bridge bot. The Bridge discards bot messages unconditionally (ADR-0010); the historical ADR-0006 allowlist filtered only events the platform delivers, which was none. Supported L2/L3/L4 automation therefore posts and verifies with `E2E_SIMULATOR_USER_ACCESS_TOKEN` (ADR-0009). Do not infer that adding `im:message.group_at_msg.include_bot:readonly` fixes this boundary; restore the harness bot mode from git history only after a direct long-connection probe observes the event and the bot Backend Smoke tuple is green.
 
 ## Safety Checks
 

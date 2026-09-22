@@ -55,6 +55,12 @@
       "skillPath": "skills/productivity/handoff/SKILL.md",
       "computedHash": "20e5f4afdef502637510bc5c64d27645d3c85c88df9cb006824bbb0980166319"
     },
+    "im-align": {
+      "source": "joeshi/im-align",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "2b083d1cb50879c407ffcba233282865daeae5d3f5a6dab351627e0a35d3b3bb"
+    },
     "implement": {
       "source": "mattpocock/skills",
       "sourceType": "github",

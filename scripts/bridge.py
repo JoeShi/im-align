@@ -144,14 +144,15 @@ def cmd_setup(args):
     if not old_type:
         old_type = "lark" if old_provider.get("domain") == "larksuite" else "feishu"
     old_chat_id = old_provider.get("default_chat_id", "")
-    spec_root = old_agent_defaults.get("spec_root", cfgmod.DEFAULTS["spec_root"])
 
     print("Feishu/Lark custom app configuration; see references/feishu-setup.md")
-    app_id = _prompt("app_id (cli_...)", old_provider.get("app_id", ""))
-    app_secret = _prompt("app_secret (leave blank to keep current value)", old_provider.get("app_secret", ""), secret=True)
+    app_id = _prompt("Bridge agent app_id (the custom Feishu/Lark app acting as the Bridge bot, cli_...)", old_provider.get("app_id", ""))
+    app_secret = _prompt("Bridge agent app_secret (leave blank to keep current value)", old_provider.get("app_secret", ""), secret=True)
     provider_type = _prompt("type feishu/lark", old_type)
-    chat_id = _prompt("default group chat_id (oc_..., optional)", old_chat_id)
+    chat_id = _prompt("default Alignment group chat_id (the group where the Bridge creates Alignment Threads, oc_..., optional)", old_chat_id)
     backend = _prompt("default Agent Backend opencode/trae-cli/kiro-cli/kimi", old_agent_defaults.get("backend", old_defaults.get("backend", "opencode")))
+    skill = _prompt("default Alignment Skill", old_agent_defaults.get("skill") or cfgmod.DEFAULTS["skill"])
+    spec_root = old_agent_defaults.get("spec_root") or cfgmod.SKILL_SPEC_ROOT_DEFAULTS.get(skill, cfgmod.DEFAULTS["spec_root"])
     domain = cfgmod.PROVIDER_TYPE_DOMAINS.get(provider_type, "")
 
     providers = dict(existing_providers)
@@ -163,7 +164,7 @@ def cmd_setup(args):
     }
     defaults = {
         "im": {"provider": provider_key},
-        "agent": {"backend": backend, "spec_root": spec_root},
+        "agent": {"backend": backend, "skill": skill, "spec_root": spec_root},
     }
     data = {"providers": providers, "defaults": defaults}
     commands = existing.get("commands") or {}
@@ -179,6 +180,8 @@ def cmd_setup(args):
             "provider": provider_key,
             "chat_id": chat_id or "oc_setup_validation",
             "backend": backend,
+            "skill": skill,
+            "spec_root": spec_root,
             "provider_type": provider_type,
             "feishu_app_id": app_id,
             "feishu_app_secret": app_secret,
@@ -584,7 +587,6 @@ def _execute_record(run_id, resume=None):
                 config["feishu_app_id"],
                 config["feishu_app_secret"],
                 config["feishu_domain"],
-                extra_participants=config["im"]["extra_participant_open_ids"],
             )
             orchestrator = Orchestrator(provider, config, record)
             permission_policy = PermissionPolicy(
