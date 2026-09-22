@@ -176,7 +176,7 @@ flowchart TD
 }
 ```
 
-- `llm_evaluation` gates (explicit decision): every boolean field must be true. Mitigations for judge instability: fixed prompts, schema-validated output, unparseable output fails closed with `failure_cause: judge_parse_error`, no retry. The calibration task (`tests/e2e/calibrate.py`, entry `python -m tests.e2e.calibrate --runs-dir <dir> --rounds 5`) re-runs the evaluator over archived transcripts and reports the judge's self-agreement rate per dimension; dimensions below the threshold (default 0.8) are listed as unstable, and the layer loses its gate standing before humans lose trust in it.
+- `llm_evaluation` gates (explicit decision): every boolean field must be true. Mitigations for judge instability: fixed prompts (all LLM-facing prompt templates live in `tests/e2e/shared/prompts.py` for review), schema-validated output, unparseable output fails closed with `failure_cause: judge_parse_error`, no retry. The calibration task (`tests/e2e/calibrate.py`, entry `python -m tests.e2e.calibrate --runs-dir <dir> --rounds 5`) re-runs the evaluator over archived transcripts and reports the judge's self-agreement rate per dimension; dimensions below the threshold (default 0.8) are listed as unstable, and the layer loses its gate standing before humans lose trust in it.
 - `notes` and descriptive fields never gate.
 - LLM access for simulator and evaluator is configured via environment variables (`E2E_SIMULATOR_LLM_BASE_URL`, `E2E_SIMULATOR_LLM_API_KEY`, `E2E_SIMULATOR_LLM_MODEL`; same for `E2E_EVALUATOR_LLM_*`), injected from CI secrets. No provider is hardcoded.
 - langgraph and its transitive dependencies live only in `[dependency-groups] dev` of `pyproject.toml`; the harness lives in `tests/e2e/` and never ships with the Skill.
