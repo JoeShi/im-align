@@ -16,8 +16,11 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-APP_TOKEN_PATH = "/open-apis/auth/v3/app_access_token/internal"
-REFRESH_PATH = "/open-apis/authen/v1/refresh_access_token"
+# lark-cli's device flow mints JWT-format user tokens; the legacy v1 refresh
+# endpoint rejects them with 20026 "refresh token not found" (measured
+# 2026-09-22), while the v2 OIDC token endpoint accepts them when the app
+# credentials are sent as client_id/client_secret in the request body.
+REFRESH_PATH = "/open-apis/authen/v2/oauth/token"
 REFRESH_SECRET_NAME = "E2E_SIMULATOR_USER_REFRESH_TOKEN"
 ACCESS_TOKEN_ENV_NAME = "E2E_SIMULATOR_USER_ACCESS_TOKEN"
 
@@ -74,15 +77,17 @@ def _request_json(url: str, body: dict, *, authorization: str = "", urlopen=None
         except (json.JSONDecodeError, UnicodeDecodeError):
             payload = {}
         code = payload.get("code", e.code)
-        message = payload.get("msg") or e.reason
+        message = payload.get("msg") or payload.get("error_description") or e.reason
         raise TokenRefreshError(
             f"Feishu token request failed (HTTP {e.code}, code {code}): {message}"
         ) from e
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
         raise TokenRefreshError(f"Feishu token request failed: {e}") from e
-    if not isinstance(payload, dict) or payload.get("code") != 0:
+    if not isinstance(payload, dict) or payload.get("code", 0) != 0:
         code = payload.get("code", "unknown") if isinstance(payload, dict) else "unknown"
-        message = payload.get("msg", "invalid response") if isinstance(payload, dict) else "invalid response"
+        message = (
+            payload.get("msg") or payload.get("error_description") or "invalid response"
+        ) if isinstance(payload, dict) else "invalid response"
         raise TokenRefreshError(
             f"Feishu token request failed (code {code}): {message}"
         )
@@ -98,27 +103,24 @@ def refresh_user_token(
     urlopen=None,
 ) -> RefreshedUserToken:
     """Exchange one rotating refresh token for a fresh token pair."""
-    app_payload = _request_json(
-        base_url.rstrip("/") + APP_TOKEN_PATH,
-        {"app_id": app_id, "app_secret": app_secret},
-        urlopen=urlopen,
-    )
-    app_access_token = _secret_value(
-        app_payload.get("app_access_token"), "app_access_token"
-    )
+    # The v2 endpoint authenticates the app via client_id/client_secret in the
+    # body instead of an app_access_token header.
     refresh_payload = _request_json(
         base_url.rstrip("/") + REFRESH_PATH,
-        {"grant_type": "refresh_token", "refresh_token": refresh_token},
-        authorization=app_access_token,
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": app_id,
+            "client_secret": app_secret,
+        },
         urlopen=urlopen,
     )
-    data = refresh_payload.get("data") or {}
     return RefreshedUserToken(
         access_token=_secret_value(
-            data.get("access_token") or data.get("user_access_token"),
+            refresh_payload.get("access_token") or refresh_payload.get("user_access_token"),
             "user access token",
         ),
-        refresh_token=_secret_value(data.get("refresh_token"), "refresh_token"),
+        refresh_token=_secret_value(refresh_payload.get("refresh_token"), "refresh_token"),
     )
 
 
