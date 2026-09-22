@@ -19,8 +19,8 @@ jobs:
     if: vars.IM_ALIGN_E2E_ENABLED == 'true' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, im-align-e2e]
     timeout-minutes: 35
-    env:
-      E2E_RUNS_DIR: ${{ runner.temp }}/im-align-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+    # runner.temp is not available in job-level env; resolve it in the steps
+    # that consume it (GitHub rejects the file otherwise).
     concurrency:
       group: im-align-feishu-single-session
       cancel-in-progress: false
@@ -41,6 +41,7 @@ jobs:
           E2E_SIMULATOR_GITHUB_SECRETS_PAT: ${{ secrets.E2E_SIMULATOR_GITHUB_SECRETS_PAT }}
         run: uv run --frozen python -m tests.e2e.refresh_user_token
       - env:
+          E2E_RUNS_DIR: ${{ runner.temp }}/im-align-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           E2E_BRIDGE_FEISHU_APP_ID: ${{ secrets.E2E_BRIDGE_FEISHU_APP_ID }}
           E2E_BRIDGE_FEISHU_APP_SECRET: ${{ secrets.E2E_BRIDGE_FEISHU_APP_SECRET }}
           E2E_BRIDGE_CHAT_ID: ${{ secrets.E2E_BRIDGE_CHAT_ID }}
@@ -56,6 +57,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: l3-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.E2E_RUNS_DIR }}
+          path: ${{ runner.temp }}/im-align-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: warn
           retention-days: 7
