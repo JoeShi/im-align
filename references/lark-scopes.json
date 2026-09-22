@@ -9,6 +9,9 @@
       "im:chat:read",
       "contact:contact.base:readonly"
     ],
-    "user": []
+    "user": [
+      "im:message.send_as_user",
+      "im:message:readonly"
+    ]
   }
 }

@@ -18,6 +18,8 @@ Bridge event stream, so both the harness bot mode and that app are gone.
 ## Scope Usage
 
 - `im:message`, `im:message:send_as_bot`: send messages, Thread cards, and emoji acknowledgements.
+- `im:message.send_as_user` (user scope): the test user sends Thread messages as a participant; without it the platform rejects sends with `230027` (measured 2026-09-22).
+- `im:message:readonly` (user scope): the test user reads chat history while polling for Bridge replies.
 - `im:message.reactions:read`: verify that Backend Smoke and Full e2e replies received the Bridge acknowledgement.
 - `im:message.group_at_msg:readonly`: receive group messages that mention the bot.
 - `im:message.group_at_msg.include_bot:readonly`: a sensitive scope documented by the platform for some bot-message cases. im-align does not require or recommend it for supported automation; ADR-0009 records that it was not validated to solve bot-originated event delivery.
@@ -64,7 +66,7 @@ CI instead stores:
 - `E2E_SIMULATOR_USER_REFRESH_TOKEN`: the current rotating refresh token;
 - `E2E_SIMULATOR_GITHUB_SECRETS_PAT`: a fine-grained GitHub PAT limited to this repository with **Secrets: write** permission.
 
-Before every serialized Feishu job, `tests/e2e/refresh_user_token.py` obtains an app access token, exchanges the refresh token for a fresh user access token, registers both generated values with the Actions log masker, and immediately sends the returned replacement refresh token to `gh secret set` over stdin. Secret persistence is retried with bounded backoff and must succeed before the short-lived access token is written to the current job's `GITHUB_ENV`. Feishu invalidates a refresh token after rotation, so both workflows keep refresh and test execution inside `im-align-feishu-single-session`; parallel refreshes would consume the same token and strand one run. The default workflow `GITHUB_TOKEN` cannot update repository Actions secrets and is not a substitute for the restricted PAT.
+Before every serialized Feishu job, `tests/e2e/refresh_user_token.py` exchanges the refresh token for a fresh user access token through the v2 OIDC token endpoint (device-flow JWT tokens are rejected by the legacy v1 refresh endpoint, measured 2026-09-22), registers both generated values with the Actions log masker, and immediately sends the returned replacement refresh token to `gh secret set` over stdin. Secret persistence is retried with bounded backoff and must succeed before the short-lived access token is written to the current job's `GITHUB_ENV`. Feishu invalidates a refresh token after rotation, so both workflows keep refresh and test execution inside `im-align-feishu-single-session`; parallel refreshes would consume the same token and strand one run. The default workflow `GITHUB_TOKEN` cannot update repository Actions secrets and is not a substitute for the restricted PAT.
 
 Refresh tokens also expire (approximately 30 days). If CI has not run within that window, refresh returns an expiry error, or GitHub secret persistence exhausts all retries after a successful Feishu exchange, repeat the interactive grant and replace `E2E_SIMULATOR_USER_REFRESH_TOKEN` manually. Never persist either user token in Bridge configuration, Session state, logs, or transcript archives.
 
