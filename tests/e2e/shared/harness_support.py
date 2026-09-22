@@ -2,10 +2,7 @@
 
 import time
 
-try:
-    from .message_protocol import bridge_identity_matches, card_title
-except ImportError:  # Direct script entry for IM Integration.
-    from message_protocol import bridge_identity_matches, card_title
+from .message_protocol import bridge_identity_matches, card_title
 
 
 _HARNESS_ONLY_ENV_PREFIXES = (

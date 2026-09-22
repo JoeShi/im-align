@@ -4,28 +4,25 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.e2e.skill_bundle import AGENT_PATHS, install_skill_bundle, load_bundle_for_skill
+from tests.e2e.shared.scenario import SkillMapping
+from tests.e2e.shared.skill_bundle import (
+    AGENT_PATHS,
+    SkillBundleError,
+    install_skill_bundle,
+)
 
 
-ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = ROOT / "tests" / "e2e" / "skill-bundles.yaml"
+SKILL = SkillMapping(
+    name="grill-with-docs",
+    source="mattpocock/skills",
+    ref="v1.2.3",
+    cli="1.5.9",
+    bundle=("grill-with-docs", "grilling", "domain-modeling", "to-spec"),
+)
 
 
-class SkillBundleTests(unittest.TestCase):
-    def test_entry_skill_resolves_complete_grill_bundle(self):
-        bundle = load_bundle_for_skill("grill-with-docs", MANIFEST)
-        self.assertEqual(bundle.name, "grill-me")
-        # grill-with-docs only forwards to grilling + domain-modeling; without
-        # them in the closure the Agent cannot load its own entry Skill.
-        self.assertEqual(
-            bundle.skills,
-            ("grill-me", "grill-with-docs", "grilling", "domain-modeling", "to-spec"),
-        )
-
-    def test_install_stages_all_skills_for_all_backends(self):
-        skills = load_bundle_for_skill("grill-with-docs", MANIFEST).skills
-        calls = []
-
+class InstallSkillBundleTests(unittest.TestCase):
+    def _fake_run(self, calls, skills):
         def fake_run(command, **kwargs):
             calls.append((command, kwargs))
             workspace = Path(kwargs["cwd"])
@@ -35,18 +32,65 @@ class SkillBundleTests(unittest.TestCase):
                     path.mkdir(parents=True, exist_ok=True)
                     (path / "SKILL.md").write_text("---\nname: x\ndescription: x\n---\n")
 
+        return fake_run
+
+    def test_install_stages_all_skills_for_all_backends(self):
+        calls = []
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / ".git" / "info").mkdir(parents=True)
-            install_skill_bundle(workspace, "grill-with-docs", manifest=MANIFEST, run=fake_run)
+            install_skill_bundle(workspace, SKILL, run=self._fake_run(calls, SKILL.bundle))
 
             self.assertEqual(len(calls), 1)
-            command = calls[0][0]
-            self.assertIn("--skill", command)
-            for skill in skills:
-                self.assertIn(skill, command)
-            self.assertIn("--agent", command)
+            command, kwargs = calls[0]
+            self.assertEqual(
+                command,
+                [
+                    "npx", "--yes", "skills@1.5.9", "add", "mattpocock/skills",
+                    *(arg for name in SKILL.bundle for arg in ("--skill", name)),
+                    *(arg for agent in AGENT_PATHS for arg in ("--agent", agent)),
+                    "--copy", "--yes",
+                ],
+            )
+            self.assertEqual(kwargs["cwd"], workspace)
             self.assertTrue((workspace / ".git" / "info" / "exclude").exists())
+
+    def test_missing_skill_md_fails_incomplete(self):
+        def fake_run(command, **kwargs):
+            workspace = Path(kwargs["cwd"])
+            for agent_path in AGENT_PATHS.values():
+                for skill in SKILL.bundle:
+                    path = workspace / agent_path / skill
+                    path.mkdir(parents=True, exist_ok=True)
+                    (path / "SKILL.md").write_text("---\nname: x\ndescription: x\n---\n")
+            # Simulate a partial install: one backend misses one SKILL.md.
+            (workspace / AGENT_PATHS["opencode"] / "to-spec" / "SKILL.md").unlink()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / ".git" / "info").mkdir(parents=True)
+            with self.assertRaisesRegex(SkillBundleError, "incompletely"):
+                install_skill_bundle(workspace, SKILL, run=fake_run)
+
+    def test_entry_skill_must_be_bundle_member(self):
+        outsider = SkillMapping(
+            name="other-skill",
+            source="mattpocock/skills",
+            ref="v1.2.3",
+            cli="1.5.9",
+            bundle=("grill-with-docs",),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(SkillBundleError, "member"):
+                install_skill_bundle(Path(tmp), outsider, run=lambda *a, **k: None)
+
+    def test_install_failure_wrapped(self):
+        def failing_run(command, **kwargs):
+            raise RuntimeError("npx crashed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(SkillBundleError, "cannot install"):
+                install_skill_bundle(Path(tmp), SKILL, run=failing_run)
 
 
 if __name__ == "__main__":

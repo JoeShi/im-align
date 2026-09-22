@@ -1,11 +1,13 @@
 """Fake ACP backend tests: raw JSON-RPC protocol order and AcpClient integration.
 
-Spawns fake_acp_agent.py as a real subprocess and feeds it line-delimited
-JSON-RPC, mirroring the style of tests/unit/test_acp_incident_replay.py but with
-transcript-driven behavior. No network, no Feishu.
+Spawns tests.e2e.shared.fake_acp_agent as a real subprocess and feeds it
+line-delimited JSON-RPC, mirroring the style of
+tests/unit/test_acp_incident_replay.py but with transcript-driven behavior.
+No network, no Feishu.
 """
 
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -18,10 +20,19 @@ from datetime import timedelta
 from pathlib import Path
 
 from scripts.im_align.acp.client import AcpClient, PermissionDecision
-from tests.e2e.fake_acp_agent import EXIT_DECISION_MISMATCH, EXIT_TRANSCRIPT
-from tests.e2e.scenario import load_transcript
+from tests.e2e.shared.fake_acp_agent import EXIT_DECISION_MISMATCH, EXIT_TRANSCRIPT
+from tests.e2e.shared.scenario import load_transcript
 
-FAKE_AGENT = Path(__file__).resolve().parents[1] / "e2e" / "fake_acp_agent.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def fake_agent_env() -> dict:
+    """Env for spawning the fake Agent via -m: repo root must be importable."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (
+        str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    ).rstrip(os.pathsep)
+    return env
 
 
 class AgentProcess:
@@ -33,8 +44,9 @@ class AgentProcess:
 
     def __init__(self, transcript: Path, cwd: Path):
         self.proc = subprocess.Popen(
-            [sys.executable, str(FAKE_AGENT), str(transcript)],
+            [sys.executable, "-m", "tests.e2e.shared.fake_acp_agent", str(transcript)],
             cwd=str(cwd),
+            env=fake_agent_env(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -362,14 +374,21 @@ class FakeAgentAcpClientTests(unittest.TestCase):
         tmp = Path(self._tmp.name)
         self.workspace = tmp / "workspace"
         self.workspace.mkdir()
+        # AcpClient inherits the parent environment for the backend
+        # subprocess, so -m resolution needs the repo root on PYTHONPATH here.
+        self._old_pythonpath = os.environ.get("PYTHONPATH", "")
+        os.environ["PYTHONPATH"] = (
+            str(REPO_ROOT) + os.pathsep + self._old_pythonpath
+        ).rstrip(os.pathsep)
 
     def tearDown(self):
+        os.environ["PYTHONPATH"] = self._old_pythonpath
         self._tmp.cleanup()
 
     def _client(self, transcript_steps: str, decide_permission=None) -> AcpClient:
         transcript = write_transcript(Path(self._tmp.name), transcript_steps)
         return AcpClient(
-            [sys.executable, str(FAKE_AGENT), str(transcript)],
+            [sys.executable, "-m", "tests.e2e.shared.fake_acp_agent", str(transcript)],
             cwd=str(self.workspace),
             spec_root="docs/specs",
             decide_permission=decide_permission,

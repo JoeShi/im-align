@@ -13,7 +13,7 @@ import json
 import urllib.request
 
 from .transports import OpenAPIThreadTransport
-from .im_integration import FeishuOpenAPIVerifier
+from .verifier import FeishuOpenAPIVerifier
 
 
 class ParticipantConfigError(ValueError):

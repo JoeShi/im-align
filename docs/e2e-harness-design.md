@@ -25,20 +25,31 @@ flowchart TB
     scenario["Scenario directory<br/>scenarios/&lt;name&gt;/"]
     definition["scenario.yaml<br/>Declarative case definition"]
     seed["seed/<br/>Literal seed tree<br/>Absent when seed_repo is set"]
-    transcript["transcript.yaml<br/>Fixed Agent steps, Turn boundaries,<br/>and user replies for IM Integration"]
 
     consumers -.-> scenario
     scenario --> definition
     scenario --> seed
-    scenario --> transcript
 ```
+
+The IM Integration layer's fixed multi-Turn script is not Scenario data; it
+lives with that layer as `tests/e2e/im_integration/transcripts/<name>.yaml`,
+resolved by scenario name from the L2 runner.
 
 `scenario.yaml` fields:
 
 ```yaml
 name: todo-greenfield
 backend: opencode            # Agent Backend command; IM Integration ignores it
-skill: grill-with-docs
+skill:                       # Skill Bundle declared per Scenario (ADR-0011); no global manifest
+  name: grill-with-docs      # entry Skill, forwarded to `bridge start --skill`
+  source: mattpocock/skills  # repo shorthand or full archive URL
+  ref: v1.2.3                # tag or full SHA of the archive
+  cli: "1.5.9"               # `npx skills@<cli>` installer version
+  bundle:                    # explicit Skill closure, entry Skill first
+    - grill-with-docs
+    - grilling
+    - domain-modeling
+    - to-spec
 requirement: |
   我想给个人项目加一个 TODO list 功能...
 timeout_seconds: 900         # strict for Smoke, loose for Full e2e
@@ -65,7 +76,8 @@ user_brief: |                # Scenario-specific product facts, not simulator in
 
 ## IM Integration Layer
 
-- `tests/e2e/fake_acp_agent.py`: a generalization of the inline `FAKE_AGENT` in `tests/unit/test_acp_incident_replay.py`. A Python subprocess speaking JSON-RPC over stdio, driven by `transcript.yaml` instead of hardcoded behavior. `end_turn` finishes the current ACP prompt while preserving the remaining step iterator; the next real Thread reply causes the Bridge to send the next prompt and resume the script. Other steps send message chunks, request permissions, write artifacts (via the same repo-relative real-path rule as the fs capability), emit the completion marker, or hang/cancel for negative paths.
+- `tests/e2e/shared/fake_acp_agent.py`: a generalization of the inline `FAKE_AGENT` in `tests/unit/test_acp_incident_replay.py`. A Python subprocess speaking JSON-RPC over stdio, driven by the layer's transcript file (`tests/e2e/im_integration/transcripts/<scenario-name>.yaml`) instead of hardcoded behavior. `end_turn` finishes the current ACP prompt while preserving the remaining step iterator; the next real Thread reply causes the Bridge to send the next prompt and resume the script. Other steps send message chunks, request permissions, write artifacts (via the same repo-relative real-path rule as the fs capability), emit the completion marker, or hang/cancel for negative paths.
+- Entry point: `./tests/e2e/im_integration/run.sh` (execs `python -m tests.e2e.shared.im_integration tests/e2e/scenarios/todo-greenfield` from the repository root).
 - `participant_replies` contains one fixed user line for every `end_turn`. The runner binds an `as-user` Participant adapter from `E2E_SIMULATOR_USER_ACCESS_TOKEN`, waits for the patched Agent question, posts the corresponding reply in the actual Thread, and requires that reply to be visible, emoji-acknowledged, and followed by a later Bridge-authored message. Completion is therefore impossible before a real user-originated event drives Turn 2.
 - The Bridge runs unmodified; only its backend command points at the fake agent. OpenAPI polling does not open a second long connection.
 - Assertions are deterministic: expected artifacts exist on disk with content containing `marker_line` (a glob `path` passes when at least one match satisfies it), Thread receives the completion card and zero Approval cards, `status --json` reports done, no branch/commit/push, and all three Participant round-trip assertions pass. OpenAPI or identity errors fail closed.
@@ -75,15 +87,16 @@ user_brief: |                # Scenario-specific product facts, not simulator in
 ## Backend Smoke Layer
 
 - One fixed greenfield Scenario (empty seed, TODO-list requirement) per supported backend, selected by `backend:` in `scenario.yaml`.
-- The runner (`tests/e2e/smoke_runner.py`, entry `python -m tests.e2e.smoke_runner <scenario_dir> [--backend kiro-cli]`) drives the whole run: seed materialization, Bridge start with the scenario's `spec_root` in the isolated user config, the User Simulator, deterministic assertions, transcript export, evaluator, and rubric archiving. The isolated user config also carries `defaults.timeouts.turn_timeout_seconds` set to the scenario's `timeout_seconds`: measured 2026-09-16, a real opencode Turn exceeded the 300 s product default and was cancelled mid-exploration, leaving a question-less partial card that stalled the Session until the scenario timeout. One Turn may therefore use the whole scenario budget; the runner's wall-clock wait bounds the run overall. The User Simulator always runs under the test-user identity (`as-user` is the only Participant Mode; ADR-0009 measured that the platform never delivers bot-originated messages to the Bridge event stream, and ADR-0010 removed the harness bot mode). LLM credentials come from `E2E_SIMULATOR_LLM_*` and `E2E_EVALUATOR_LLM_*`. Anything missing skips only the affected tuple with an explicit report.
-- `tests/e2e/participants.py` is the Participant Adapter seam. Its as-user adapter hides authentication, Bridge bot open_id resolution, and mention formatting behind the Thread interface. Explicit open_id environment values are optional overrides. Every simulator reply returns a receipt. Deterministic assertions require at least one visible reply, an emoji ack on every reply, and a later Bridge-authored Thread message proving that the reply drove a Turn. Participant thread failures are propagated to the runner and stop the Session so missing permissions fail promptly instead of waiting for the scenario timeout.
-- Before starting Bridge, the runner installs the complete bundle selected by
-  the Scenario entry Skill from `tests/e2e/skill-bundles.yaml` with the pinned
-  `npx skills` CLI. It stages project-local skill directories for all four
+- The runner (`tests/e2e/shared/smoke_runner.py`, entry `./tests/e2e/backend_smoke/run.sh`, which execs `python -m tests.e2e.shared.smoke_runner <scenario_dir> [--backend kiro-cli]`) drives the whole run: seed materialization, Bridge start with the scenario's `spec_root` in the isolated user config, the User Simulator, deterministic assertions, transcript export, evaluator, and rubric archiving. The isolated user config also carries `defaults.timeouts.turn_timeout_seconds` set to the scenario's `timeout_seconds`: measured 2026-09-16, a real opencode Turn exceeded the 300 s product default and was cancelled mid-exploration, leaving a question-less partial card that stalled the Session until the scenario timeout. One Turn may therefore use the whole scenario budget; the runner's wall-clock wait bounds the run overall. The User Simulator always runs under the test-user identity (`as-user` is the only Participant Mode; ADR-0009 measured that the platform never delivers bot-originated messages to the Bridge event stream, and ADR-0010 removed the harness bot mode). LLM credentials come from `E2E_SIMULATOR_LLM_*` and `E2E_EVALUATOR_LLM_*`. Anything missing skips only the affected tuple with an explicit report.
+- `tests/e2e/shared/participants.py` is the Participant Adapter seam. Its as-user adapter hides authentication, Bridge bot open_id resolution, and mention formatting behind the Thread interface. Explicit open_id environment values are optional overrides. Every simulator reply returns a receipt. Deterministic assertions require at least one visible reply, an emoji ack on every reply, and a later Bridge-authored Thread message proving that the reply drove a Turn. Participant thread failures are propagated to the runner and stop the Session so missing permissions fail promptly instead of waiting for the scenario timeout.
+- Before starting Bridge, the runner installs the complete Skill Bundle
+  declared by the Scenario's `skill:` mapping (`source`, pinned `ref`, `npx
+  skills` installer version `cli`, and the explicit `bundle` closure;
+  ADR-0011). It stages project-local skill directories for all four
   Agent Backends and verifies every bundle member has a `SKILL.md`; the staged
   directories are Git-excluded test fixtures and are never treated as Spec
   artifacts.
-- The User Simulator is a langgraph graph (`tests/e2e/user_simulator.py`) polled by the runner over Feishu OpenAPI (≈3 s, under the test user's `user_access_token`) instead of a long connection, so it never contends with the Bridge for the single-session lock. The polling loop (`run_simulator` in `smoke_runner.py`) exits on graph terminal state, Bridge terminal state, or the scenario's wall-clock timeout. Measured constraint: the chat-container message listing omits thread replies entirely for bot identities, so both the polling transport and the Thread verifier resolve the root message's `thread_id` once and list the `thread` container; the thread container rejects message ids, making the root lookup mandatory:
+- The User Simulator is a langgraph graph (`tests/e2e/shared/user_simulator.py`) polled by the runner over Feishu OpenAPI (≈3 s, under the test user's `user_access_token`) instead of a long connection, so it never contends with the Bridge for the single-session lock. The polling loop (`run_simulator` in `tests/e2e/shared/smoke_runner.py`) exits on graph terminal state, Bridge terminal state, or the scenario's wall-clock timeout. Measured constraint: the chat-container message listing omits thread replies entirely for bot identities, so both the polling transport and the Thread verifier resolve the root message's `thread_id` once and list the `thread` container; the thread container rejects message ids, making the root lookup mandatory:
 
 ```mermaid
 flowchart TD
@@ -127,7 +140,7 @@ flowchart TD
 
   Round-trip verification distinguishes the Bridge's bot open ID from its app ID: mentions use the open ID, while Feishu message senders and reaction operators can use the app ID. Match each observed identity by its declared type against the corresponding configured Bridge identity. A subsequent Turn requires an `🤖 Agent` or `⏳ Agent Is Thinking` card; unrelated lifecycle cards such as Session Stopped are not Turn evidence.
 
-- `RunEvaluator` (`tests/e2e/run_evaluator.py`) runs once after the Session ends:
+- `RunEvaluator` (`tests/e2e/shared/run_evaluator.py`) runs once after the Session ends:
 
 ```mermaid
 flowchart TD
@@ -170,7 +183,7 @@ flowchart TD
 
 ## Full e2e Layer
 
-- Same Scenario schema and same runner as Backend Smoke; the supported matrix iterates Agent Backends × Scenarios (`python -m tests.e2e.smoke_runner <dir>... --backends all`), always under the test-user Participant identity.
+- Same Scenario schema and same runner as Backend Smoke; the supported matrix iterates Agent Backends × Scenarios via `./tests/e2e/full_e2e/run.sh` (which execs `python -m tests.e2e.shared.smoke_runner <dir>... --backends all`), always under the test-user Participant identity.
 - Brownfield Scenarios declare `seed_repo` (public GitHub only) and are cloned at run time, checked out to the pinned full SHA. No vendored copies.
 - Trigger: manual. The maintainer supplies Feishu credentials, LLM credentials, and backend binaries, then runs the delivered script. No CI wiring is required for this layer.
 

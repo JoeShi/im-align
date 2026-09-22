@@ -7,27 +7,71 @@ explicit env dict.
 
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from tests.e2e.im_integration import (
+from tests.e2e.shared.im_integration import (
     IntegrationSkip,
     RunResult,
     SeedCloner,
-    ThreadVerifier,
-    FeishuOpenAPIVerifier,
+    _InvalidCompletionWatcher,
     _write_user_config,
     check_artifacts,
     feishu_credentials,
-    find_approval_card,
     git_unchanged_except,
     materialize_seed,
-    message_contains_card,
     snapshot_git,
 )
-from tests.e2e.scenario import load_scenario
+from tests.e2e.shared.scenario import load_scenario
+from tests.e2e.shared.transports import FakeThreadTransport, ThreadMessage
+from tests.e2e.shared.verifier import (
+    INVALID_COMPLETION_TITLE,
+    FeishuOpenAPIVerifier,
+    ThreadVerifier,
+    find_approval_card,
+    message_contains_card,
+)
 
 SCENARIO_DIR = Path(__file__).resolve().parents[1] / "e2e" / "scenarios" / "todo-greenfield"
+
+
+class InvalidCompletionWatcherTests(unittest.TestCase):
+    def test_invalid_completion_card_sets_event(self):
+        inner = FakeThreadTransport()
+        inner.push(ThreadMessage(message_id="m1", text="", card_title=INVALID_COMPLETION_TITLE))
+        event = threading.Event()
+        watcher = _InvalidCompletionWatcher(inner, event)
+
+        message = watcher.poll()
+
+        self.assertEqual(message.message_id, "m1")
+        self.assertTrue(event.is_set())
+
+    def test_other_messages_do_not_set_event(self):
+        inner = FakeThreadTransport()
+        inner.push(ThreadMessage(message_id="m1", text="还需要什么？", card_title="🤖 Agent"))
+        event = threading.Event()
+        watcher = _InvalidCompletionWatcher(inner, event)
+
+        watcher.poll()
+
+        self.assertFalse(event.is_set())
+
+    def test_idle_poll_does_not_set_event(self):
+        watcher = _InvalidCompletionWatcher(FakeThreadTransport(), threading.Event())
+
+        self.assertIsNone(watcher.poll())
+        self.assertFalse(watcher._event.is_set())
+
+    def test_post_reply_delegates(self):
+        inner = FakeThreadTransport()
+        watcher = _InvalidCompletionWatcher(inner, threading.Event())
+
+        receipt = watcher.post_reply("固定回复")
+
+        self.assertEqual(inner.replies, ["固定回复"])
+        self.assertEqual(receipt.message_id, "fake-reply-1")
 
 
 class WriteUserConfigTests(unittest.TestCase):
@@ -53,7 +97,8 @@ class WriteUserConfigTests(unittest.TestCase):
         self.assertEqual(data["defaults"]["agent"]["spec_root"], scenario.spec_root)
         self.assertEqual(data["commands"]["e2e-fake"]["backend"], "kiro-cli")
         args = data["commands"]["e2e-fake"]["args"]
-        self.assertTrue(all(Path(a).is_absolute() for a in args), "backend argv must be absolute")
+        self.assertEqual(args[:2], ["-m", "tests.e2e.shared.fake_acp_agent"])
+        self.assertTrue(Path(args[2]).is_absolute(), "transcript path must be absolute")
 
     def test_writes_turn_timeout_for_backend_smoke(self):
         import yaml

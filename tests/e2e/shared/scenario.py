@@ -4,8 +4,11 @@ Layout (docs/e2e-harness-design.md):
 
     scenarios/<name>/
     ├── scenario.yaml      # declarative case definition
-    ├── seed/              # literal seed tree; absent when seed_repo is set
-    └── transcript.yaml    # fixed steps for the IM Integration fake backend
+    └── seed/              # literal seed tree; absent when seed_repo is set
+
+The IM Integration layer's fixed multi-Turn script is not Scenario data; it
+lives in tests/e2e/im_integration/transcripts/<name>.yaml next to that layer's
+entry point.
 
 seed_repo pins a public repository to a full commit SHA. Branch and tag names
 are rejected because only a full SHA makes the seed byte-identical across runs.
@@ -17,13 +20,9 @@ from pathlib import Path
 
 import yaml
 
-try:
-    from scripts.im_align.config import ConfigError, normalize_spec_root
-except ImportError:  # Running as a plain subprocess from tests/e2e.
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from scripts.im_align.config import ConfigError, normalize_spec_root
+# scripts is a repository-root package; the repository root is on sys.path
+# under `python -m` from the root (and under unittest -t .).
+from scripts.im_align.config import ConfigError, normalize_spec_root
 
 SUPPORTED_BACKENDS = ("opencode", "trae-cli", "kiro-cli", "kimi")
 
@@ -59,11 +58,22 @@ class SeedRepo:
     ref: str  # full commit SHA only
 
 
+@dataclass(frozen=True)
+class SkillMapping:
+    """Skill Bundle declared by a Scenario (ADR-0011); no global manifest."""
+
+    name: str  # entry Skill, forwarded to `bridge start --skill`
+    source: str  # repo shorthand or full archive URL
+    ref: str  # tag or full SHA of the archive
+    cli: str  # `npx skills@<cli>` installer version
+    bundle: tuple  # explicit Skill closure, entry Skill first by convention
+
+
 @dataclass
 class Scenario:
     name: str
     backend: str
-    skill: str
+    skill: SkillMapping
     requirement: str
     timeout_seconds: int
     seed_repo: SeedRepo | None
@@ -76,9 +86,6 @@ class Scenario:
     @property
     def seed_dir(self):
         return self.directory / "seed"
-
-    def transcript_path(self):
-        return self.directory / "transcript.yaml"
 
 
 @dataclass
@@ -138,6 +145,31 @@ def _validate_artifact_path(path, field_name):
     return path
 
 
+def _load_skill(raw) -> SkillMapping:
+    if isinstance(raw, str):
+        raise ScenarioError(
+            "skill must be a mapping with name/source/ref/cli/bundle; "
+            "the legacy bare-string form was removed (ADR-0011)"
+        )
+    raw = _require_mapping(raw, "skill")
+    missing = [key for key in ("name", "source", "ref", "cli", "bundle") if key not in raw]
+    if missing:
+        raise ScenarioError(f"skill is missing required keys: {', '.join(missing)}")
+    name = _require_str(raw["name"], "skill.name")
+    source = _require_str(raw["source"], "skill.source")
+    ref = _require_str(raw["ref"], "skill.ref")
+    cli = _require_str(raw["cli"], "skill.cli")
+    bundle_raw = raw["bundle"]
+    if not isinstance(bundle_raw, list) or not bundle_raw:
+        raise ScenarioError("skill.bundle must be a non-empty array")
+    bundle = tuple(
+        _require_str(item, f"skill.bundle[{i}]") for i, item in enumerate(bundle_raw)
+    )
+    if name not in bundle:
+        raise ScenarioError(f"skill.name {name!r} must be a member of skill.bundle")
+    return SkillMapping(name=name, source=source, ref=ref, cli=cli, bundle=bundle)
+
+
 def load_scenario(directory) -> Scenario:
     directory = Path(directory)
     source = directory / "scenario.yaml"
@@ -158,7 +190,7 @@ def load_scenario(directory) -> Scenario:
         raise ScenarioError(
             f"backend must be one of {', '.join(SUPPORTED_BACKENDS)}: {backend!r}"
         )
-    skill = _require_str(data["skill"], "skill")
+    skill = _load_skill(data["skill"])
     requirement = _require_str(data["requirement"], "requirement")
 
     timeout_seconds = data["timeout_seconds"]

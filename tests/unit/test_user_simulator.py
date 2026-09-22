@@ -2,12 +2,12 @@
 
 import unittest
 
-from tests.e2e.transports import (
+from tests.e2e.shared.transports import (
     FakeSimulatorLLM,
     FakeThreadTransport,
     ThreadMessage,
 )
-from tests.e2e.user_simulator import (
+from tests.e2e.shared.user_simulator import (
     MAX_TOLERATED_ERRORS,
     build_graph,
     classify_message,

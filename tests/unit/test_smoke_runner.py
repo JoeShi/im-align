@@ -8,9 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.e2e.im_integration import IntegrationSkip
-from tests.e2e.scenario import load_scenario
-from tests.e2e.smoke_runner import (
+from tests.e2e.shared.im_integration import IntegrationSkip
+from tests.e2e.shared.scenario import load_scenario
+from tests.e2e.shared.smoke_runner import (
     backend_matrix,
     participant_round_trip_assertions,
     run_guarded_simulator,
@@ -22,8 +22,8 @@ from tests.e2e.smoke_runner import (
     wait_for_root_message,
     SmokeResult,
 )
-from tests.e2e.transports import FakeSimulatorLLM, FakeThreadTransport, ThreadMessage
-from tests.e2e.user_simulator import build_graph
+from tests.e2e.shared.transports import FakeSimulatorLLM, FakeThreadTransport, ThreadMessage
+from tests.e2e.shared.user_simulator import build_graph
 
 SCENARIO_DIR = Path(__file__).resolve().parents[1] / "e2e" / "scenarios" / "todo-greenfield"
 

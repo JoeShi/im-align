@@ -5,7 +5,7 @@ instead of hardcoded behavior, this subprocess is driven by a transcript.yaml
 file and replays it over line-delimited JSON-RPC on stdio. The Bridge runs
 unmodified; only its backend command points here.
 
-Usage: python fake_acp_agent.py <transcript.yaml>
+Usage: python -m tests.e2e.shared.fake_acp_agent <transcript.yaml>
 
 Protocol surface mirrors the measured ACP backends (scripts/im_align/acp/client.py):
   - initialize / session/new / session/load / session/set_config_option answers
@@ -28,11 +28,7 @@ import json
 import sys
 from pathlib import Path
 
-try:
-    from .scenario import ScenarioError, load_transcript
-except ImportError:  # Running as a plain subprocess: python fake_acp_agent.py ...
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from scenario import ScenarioError, load_transcript
+from .scenario import ScenarioError, load_transcript
 
 EXIT_TRANSCRIPT = 2  # invalid transcript or refused artifact path
 EXIT_DECISION_MISMATCH = 3  # permission outcome differed from the declared decision

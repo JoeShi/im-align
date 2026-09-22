@@ -8,8 +8,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from tests.e2e.smoke_runner import main, run_smoke
-from tests.e2e.transports import FakeEvaluatorLLM, FakeSimulatorLLM, FakeThreadTransport
+from tests.e2e.shared.smoke_runner import main, run_smoke
+from tests.e2e.shared.transports import FakeEvaluatorLLM, FakeSimulatorLLM, FakeThreadTransport
 from tests.unit import test_smoke_runner as fixtures
 
 SCENARIO_DIR = fixtures.SCENARIO_DIR
@@ -45,9 +45,9 @@ class FailureArchiveTests(unittest.TestCase):
                         spec.write_text("TODO Spec")
                     return {"run_id": "run-test", "root_message_id": "root", "state": "done"}
 
-                with patch("tests.e2e.smoke_runner.install_skill_bundle"), patch(
-                    "tests.e2e.smoke_runner._bridge", side_effect=bridge,
-                ), patch("tests.e2e.smoke_runner.run_simulator", return_value={
+                with patch("tests.e2e.shared.smoke_runner.install_skill_bundle"), patch(
+                    "tests.e2e.shared.smoke_runner._bridge", side_effect=bridge,
+                ), patch("tests.e2e.shared.smoke_runner.run_simulator", return_value={
                     "reply_receipts": [{"message_id": "reply", "create_time": 1.0}],
                 }):
                     result = run_smoke(
@@ -92,8 +92,8 @@ class FailureArchiveTests(unittest.TestCase):
                     raise RuntimeError("secondary cleanup failure")
                 self.fail(f"unexpected Bridge call {args}")
 
-            with patch("tests.e2e.smoke_runner.install_skill_bundle"), patch(
-                "tests.e2e.smoke_runner._bridge", side_effect=bridge,
+            with patch("tests.e2e.shared.smoke_runner.install_skill_bundle"), patch(
+                "tests.e2e.shared.smoke_runner._bridge", side_effect=bridge,
             ):
                 result = run_smoke(SCENARIO_DIR, env=env)
             self.assertEqual(result.verdict, "fail")
@@ -127,9 +127,9 @@ class FailureArchiveTests(unittest.TestCase):
             def bridge(run_env, workspace, args, timeout):
                 return {"run_id": "run-test", "root_message_id": "root", "state": "stopped"}
 
-            with patch("tests.e2e.smoke_runner.install_skill_bundle"), patch(
-                "tests.e2e.smoke_runner._bridge", side_effect=bridge,
-            ), patch("tests.e2e.smoke_runner.run_simulator", side_effect=simulator):
+            with patch("tests.e2e.shared.smoke_runner.install_skill_bundle"), patch(
+                "tests.e2e.shared.smoke_runner._bridge", side_effect=bridge,
+            ), patch("tests.e2e.shared.smoke_runner.run_simulator", side_effect=simulator):
                 result = run_smoke(
                     SCENARIO_DIR, env=env, verifier=verifier,
                     thread_transport=FakeThreadTransport(),

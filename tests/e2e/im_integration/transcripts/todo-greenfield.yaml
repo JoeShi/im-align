@@ -1,0 +1,32 @@
+# Fixed multi-Turn script for the IM Integration fake backend and Participant.
+# The happy path per ADR-0005 produces zero Approval cards, so no
+# request_permission step appears here. Each end_turn hands control to the
+# corresponding user-originated participant_replies entry.
+participant_replies:
+  - "优先级只需要高、中、低三档，数据存储使用单个 JSON 文件。"
+  - "任务只需要一句简短描述，不需要截止日期，列表按添加顺序展示即可。"
+  - "已完成的任务保留在列表里但置灰展示，另外支持一键清除所有已完成任务。"
+steps:
+  - type: send_text
+    text: "好的，我先澄清几个基础问题：优先级排序是否只需要高/中/低三档？数据存储用单个 JSON 文件是否可以？"
+  - type: end_turn
+  - type: send_text
+    text: "明白。再确认一下任务模型：任务是否只需要一句简短描述？需不需要支持截止日期？列表按什么顺序展示比较合适？"
+  - type: end_turn
+  - type: send_text
+    text: "了解。最后一个问题：标记完成的任务你希望直接从列表移除，还是保留但做视觉区分？是否需要一键清除已完成任务的能力？"
+  - type: end_turn
+  - type: send_text
+    text: "清楚了。基于以上澄清，我将 Spec 写入 docs/adr/todo.md。"
+  - type: write_artifact
+    path: docs/adr/todo.md
+    content: |
+      # TODO List Spec
+
+      - 添加任务（一句简短描述）、标记完成
+      - 优先级排序：高/中/低三档
+      - 本地存储：单个 JSON 文件
+      - 列表按添加顺序展示
+      - 已完成任务保留在列表中置灰展示；支持一键清除已完成任务
+  - type: emit_marker
+    path: docs/adr/todo.md

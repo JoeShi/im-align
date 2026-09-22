@@ -15,7 +15,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --frozen
-      - run: uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/unit/*.py
+      - run: uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/e2e/*/*.py tests/unit/*.py
       - run: uv run --frozen python -m unittest discover -s tests/unit -t .
       - run: uv run --frozen python scripts/bridge.py --help
       - run: git diff --check
@@ -71,4 +71,4 @@ jobs:
           E2E_BRIDGE_FEISHU_APP_ID: ${{ secrets.E2E_BRIDGE_FEISHU_APP_ID }}
           E2E_BRIDGE_FEISHU_APP_SECRET: ${{ secrets.E2E_BRIDGE_FEISHU_APP_SECRET }}
           E2E_BRIDGE_CHAT_ID: ${{ secrets.E2E_BRIDGE_CHAT_ID }}
-        run: uv run --frozen python -m tests.e2e.im_integration tests/e2e/scenarios/todo-greenfield
+        run: ./tests/e2e/im_integration/run.sh

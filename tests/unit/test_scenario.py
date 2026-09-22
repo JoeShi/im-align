@@ -5,14 +5,25 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from tests.e2e.scenario import ScenarioError, load_scenario, load_transcript
+import yaml
+
+from tests.e2e.shared.scenario import ScenarioError, load_scenario, load_transcript
 
 FULL_SHA = "a" * 40
 
 VALID_SCENARIO = f"""
 name: demo
 backend: kiro-cli
-skill: grill-with-docs
+skill:
+  name: grill-with-docs
+  source: mattpocock/skills
+  ref: v1.2.3
+  cli: "1.5.9"
+  bundle:
+    - grill-with-docs
+    - grilling
+    - domain-modeling
+    - to-spec
 requirement: |
   add a TODO list
 timeout_seconds: 900
@@ -45,6 +56,14 @@ class LoadScenarioTests(unittest.TestCase):
             self.assertEqual(scenario.llm_dimensions, ["asked_questions"])
             self.assertIsNone(scenario.seed_repo)
             self.assertFalse(scenario.seed_dir.is_dir())
+            self.assertEqual(scenario.skill.name, "grill-with-docs")
+            self.assertEqual(scenario.skill.source, "mattpocock/skills")
+            self.assertEqual(scenario.skill.ref, "v1.2.3")
+            self.assertEqual(scenario.skill.cli, "1.5.9")
+            self.assertEqual(
+                scenario.skill.bundle,
+                ("grill-with-docs", "grilling", "domain-modeling", "to-spec"),
+            )
 
     def test_missing_required_field_rejected(self):
         import yaml
@@ -168,6 +187,81 @@ class SpecRootFieldTests(unittest.TestCase):
         scenario = load_scenario(scenario_dir)
         self.assertEqual(scenario.spec_root, "docs/adr")
         self.assertTrue(scenario.expected_artifacts[0].path.startswith(scenario.spec_root + "/"))
+
+
+class SkillMappingTests(unittest.TestCase):
+    def _write(self, tmp, skill):
+        data = yaml.safe_load(textwrap.dedent(VALID_SCENARIO))
+        data["skill"] = skill
+        (Path(tmp) / "scenario.yaml").write_text(
+            yaml.safe_dump(data, allow_unicode=True), encoding="utf-8"
+        )
+        return Path(tmp)
+
+    def test_legacy_bare_string_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(tmp, "grill-with-docs")
+            with self.assertRaisesRegex(ScenarioError, "ADR-0011"):
+                load_scenario(tmp)
+
+    def test_missing_key_rejected(self):
+        skill = {
+            "name": "grill-with-docs",
+            "source": "mattpocock/skills",
+            "ref": "v1.2.3",
+            "cli": "1.5.9",
+            "bundle": ["grill-with-docs", "grilling"],
+        }
+        for key in ("name", "source", "ref", "cli", "bundle"):
+            with tempfile.TemporaryDirectory() as tmp:
+                self._write(tmp, {k: v for k, v in skill.items() if k != key})
+                with self.assertRaisesRegex(ScenarioError, key, msg=key):
+                    load_scenario(tmp)
+
+    def test_empty_bundle_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(
+                tmp,
+                {
+                    "name": "grill-with-docs",
+                    "source": "mattpocock/skills",
+                    "ref": "v1.2.3",
+                    "cli": "1.5.9",
+                    "bundle": [],
+                },
+            )
+            with self.assertRaisesRegex(ScenarioError, "bundle"):
+                load_scenario(tmp)
+
+    def test_name_must_be_bundle_member(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(
+                tmp,
+                {
+                    "name": "other-skill",
+                    "source": "mattpocock/skills",
+                    "ref": "v1.2.3",
+                    "cli": "1.5.9",
+                    "bundle": ["grill-with-docs"],
+                },
+            )
+            with self.assertRaisesRegex(ScenarioError, "member"):
+                load_scenario(tmp)
+
+    def test_non_string_bundle_entry_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._write(
+                tmp,
+                {
+                    "name": "grill-with-docs",
+                    "source": "mattpocock/skills",
+                    "ref": "v1.2.3",
+                    "cli": "1.5.9",
+                    "bundle": ["grill-with-docs", 42],
+                },
+            )
+            with self.assertRaisesRegex(ScenarioError, "bundle\\[1\\]"):
+                load_scenario(tmp)
 
 
 class LoadTranscriptTests(unittest.TestCase):

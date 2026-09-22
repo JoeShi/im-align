@@ -7,7 +7,7 @@ import io
 import unittest
 import urllib.error
 
-from tests.e2e.transports import OpenAPIThreadTransport, post_json_with_deadline
+from tests.e2e.shared.transports import OpenAPIThreadTransport, post_json_with_deadline
 
 
 class FakeResponse:

@@ -1,9 +1,9 @@
 """IM Integration layer runner: scripted fake ACP backend against the real Bridge.
 
 Drives one Scenario end to end: materialize a temporary seed workspace, point
-the Bridge's backend command at fake_acp_agent.py through a command alias in an
-isolated XDG_CONFIG_HOME, run start/wait/status, then apply deterministic
-assertions (docs/e2e-harness-design.md):
+the Bridge's backend command at tests.e2e.shared.fake_acp_agent through a
+command alias in an isolated XDG_CONFIG_HOME, run start/wait/status, then apply
+deterministic assertions (docs/e2e-harness-design.md):
 
   - expected_artifacts exist with content containing marker_line
     (path may be a glob; passes when at least one match satisfies it);
@@ -29,43 +29,41 @@ import sys
 import tempfile
 import threading
 import time
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
-try:
-    from .harness_support import (
-        bridge_worker_env,
-        participant_round_trip_assertions,
-        run_guarded_actor,
-        wait_for_root_message,
-    )
-    from .scenario import Scenario, load_scenario, load_transcript
-    from .message_protocol import bridge_identity_matches
-except ImportError:  # Running as a plain script.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from harness_support import (
-        bridge_worker_env,
-        participant_round_trip_assertions,
-        run_guarded_actor,
-        wait_for_root_message,
-    )
-    from scenario import Scenario, load_scenario, load_transcript
-    from message_protocol import bridge_identity_matches
+from .harness_support import (
+    bridge_worker_env,
+    participant_round_trip_assertions,
+    run_guarded_actor,
+    wait_for_root_message,
+)
+from .scenario import Scenario, load_scenario, load_transcript
+from .verifier import (
+    COMPLETION_CARD_TITLE,
+    INVALID_COMPLETION_TITLE,
+    ThreadVerifier,
+    find_approval_card,
+    message_contains_card,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 BRIDGE_PATH = REPO_ROOT / "scripts" / "bridge.py"
-FAKE_AGENT_PATH = Path(__file__).resolve().parent / "fake_acp_agent.py"
+# Fixed scripts for the IM Integration fake backend live with the layer, not
+# with the shared Scenario data: one file per Scenario name.
+TRANSCRIPTS_DIR = Path(__file__).resolve().parent.parent / "im_integration" / "transcripts"
+
+
+def transcript_path_for(scenario: Scenario) -> Path:
+    return TRANSCRIPTS_DIR / f"{scenario.name}.yaml"
 
 # Environment variables holding CI secrets for the real Feishu Thread. Never
 # hardcode values; a missing variable skips the run.
 ENV_APP_ID = "E2E_BRIDGE_FEISHU_APP_ID"
 ENV_APP_SECRET = "E2E_BRIDGE_FEISHU_APP_SECRET"
 ENV_CHAT_ID = "E2E_BRIDGE_CHAT_ID"
-
-COMPLETION_CARD_TITLE = "✅ Alignment Complete"
 
 
 class IntegrationSkip(Exception):
@@ -204,179 +202,7 @@ def git_unchanged_except(before: dict, after: dict, allowed_paths: list) -> bool
     return True
 
 
-# ---- Feishu OpenAPI thread verification (transport seam, injectable) ----
-
-
-class ThreadVerifier:
-    """Post-run checks under the selected Participant identity."""
-
-    def messages_since(self, chat_id: str, since_ts: float) -> list:
-        raise NotImplementedError
-
-    def completion_card_received(self, chat_id: str, since_ts: float) -> bool:
-        raise NotImplementedError
-
-    def approval_card_received(self, chat_id: str, since_ts: float) -> bool:
-        raise NotImplementedError
-
-    def message_reaction_received(
-        self, message_id: str, operator_open_id: str, *, operator_app_id: str = ""
-    ) -> bool:
-        raise NotImplementedError
-
-
-APPROVAL_CARD_TITLE = "🔐 Approval Request"
-
-
-def message_contains_card(message: dict, marker: str) -> bool:
-    """Deterministic card marker check over one im/v1/messages item."""
-    body = json.dumps(message.get("body", {}), ensure_ascii=False)
-    return marker in body
-
-
-def find_approval_card(messages: list) -> bool:
-    """True when any message carries an Approval card (ADR-0005 happy-path gate).
-
-    Matches the card header title from cards.approval_card plus the
-    `"im_align": "approval"` button value, so a renamed title alone cannot
-    hide a regression that re-introduces Approval cards.
-    """
-    for message in messages:
-        body = json.dumps(message.get("body", {}), ensure_ascii=False)
-        if APPROVAL_CARD_TITLE in body or '"im_align": "approval"' in body:
-            return True
-    return False
-
-
-class FeishuOpenAPIVerifier(ThreadVerifier):
-    """Poll im/v1/messages over HTTPS under the user identity; keeps the long-connection lock free.
-
-    The Bridge app intentionally lacks im:message.group_msg, so the runner
-    builds this with the test-user Participant identity, never the Bridge
-    credentials.
-
-    Measured constraint: the chat-container listing omits thread replies for
-    bot identities, so when root_message_id is set the verifier resolves the
-    root message's thread_id once and lists the thread container.
-    """
-
-    def __init__(
-        self,
-        domain: str = "feishu",
-        user_access_token: str = "",
-        root_message_id: str = "",
-    ):
-        if not user_access_token:
-            raise ValueError("user_access_token is required")
-        self._user_access_token = user_access_token
-        self._root_message_id = root_message_id
-        self._thread_id = ""
-        self._base = (
-            "https://open.feishu.cn" if domain == "feishu" else "https://open.larksuite.com"
-        )
-
-    def _request(
-        self, method: str, path: str, body: dict | None = None, token: str = ""
-    ) -> dict:
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        headers = {"Content-Type": "application/json; charset=utf-8"}
-        if token:
-            headers["Authorization"] = "Bearer " + token
-        req = urllib.request.Request(
-            self._base + path,
-            data=data,
-            method=method,
-            headers=headers,
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-    def _token(self) -> str:
-        return self._user_access_token
-
-    def _resolve_thread_id(self, token: str) -> str:
-        if self._thread_id:
-            return self._thread_id
-        import urllib.parse
-
-        message_id = urllib.parse.quote(self._root_message_id, safe="")
-        resp = self._request("GET", f"/open-apis/im/v1/messages/{message_id}", token=token)
-        if resp.get("code") != 0:
-            raise RuntimeError(f"resolve thread failed: {resp.get('msg')}")
-        items = resp.get("data", {}).get("items", [])
-        thread_id = items[0].get("thread_id", "") if items else ""
-        if not thread_id:
-            raise RuntimeError("root message has no thread_id")
-        self._thread_id = thread_id
-        return thread_id
-
-    def _container_query(self, chat_id: str, page_token: str, token: str) -> str:
-        if self._root_message_id:
-            container = (
-                "container_id_type=thread"
-                f"&container_id={self._resolve_thread_id(token)}"
-            )
-        else:
-            container = f"container_id_type=chat&container_id={chat_id}"
-        query = f"/open-apis/im/v1/messages?{container}&sort_type=ByCreateTimeDesc&page_size=50"
-        if page_token:
-            query += f"&page_token={page_token}"
-        return query
-
-    def messages_since(self, chat_id: str, since_ts: float) -> list:
-        """Messages at or after since_ts in ascending order; stops paging once older items appear."""
-        token = self._token()
-        page_token = ""
-        found = []
-        while True:
-            query = self._container_query(chat_id, page_token, token)
-            resp = self._request("GET", query, token=token)
-            if resp.get("code") != 0:
-                raise RuntimeError(f"list messages failed: {resp.get('msg')}")
-            crossed = False
-            for item in resp.get("data", {}).get("items", []):
-                create_time = int(item.get("create_time", "0")) / 1000
-                if create_time < since_ts:
-                    crossed = True
-                else:
-                    found.append(item)
-            if crossed:
-                break
-            page_token = resp.get("data", {}).get("page_token", "")
-            if not resp.get("data", {}).get("has_more"):
-                break
-        return found
-
-    def completion_card_received(self, chat_id: str, since_ts: float) -> bool:
-        for message in self.messages_since(chat_id, since_ts):
-            if message_contains_card(message, COMPLETION_CARD_TITLE):
-                return True
-        return False
-
-    def approval_card_received(self, chat_id: str, since_ts: float) -> bool:
-        return find_approval_card(self.messages_since(chat_id, since_ts))
-
-    def message_reaction_received(
-        self, message_id: str, operator_open_id: str, *, operator_app_id: str = ""
-    ) -> bool:
-        token = self._token()
-        path = f"/open-apis/im/v1/messages/{message_id}/reactions?page_size=50"
-        resp = self._request("GET", path, token=token)
-        if resp.get("code") != 0:
-            raise RuntimeError(f"list message reactions failed: {resp.get('msg')}")
-        for item in resp.get("data", {}).get("items", []):
-            reaction_type = item.get("reaction_type") or {}
-            operator = item.get("operator") or {}
-            observed_operator = operator.get("operator_id") or item.get("operator_id", "")
-            if (
-                reaction_type.get("emoji_type") == "OK"
-                and bridge_identity_matches(
-                    observed_operator, operator.get("operator_type", ""),
-                    operator_open_id, operator_app_id,
-                )
-            ):
-                return True
-        return False
+# ---- Feishu OpenAPI thread verification lives in verifier.py ----
 
 
 # ---- Scripted Participant actor ----
@@ -425,6 +251,27 @@ def run_scripted_participant(
             f"scripted Participant posted {reply_index}/{len(participant_replies)} replies"
         )
     return receipts
+
+
+class _InvalidCompletionWatcher:
+    """Transport wrapper that flags the Bridge's invalid-completion card.
+
+    The scripted Participant polls Thread messages anyway, so this is the
+    earliest harness-side detection point for a rejected completion marker.
+    """
+
+    def __init__(self, inner, event: threading.Event):
+        self._inner = inner
+        self._event = event
+
+    def poll(self):
+        message = self._inner.poll()
+        if message is not None and getattr(message, "card_title", "") == INVALID_COMPLETION_TITLE:
+            self._event.set()
+        return message
+
+    def post_reply(self, text):
+        return self._inner.post_reply(text)
 
 
 # ---- Bridge driving ----
@@ -496,9 +343,14 @@ def _write_user_config(
             "e2e-fake": {
                 "backend": backend or scenario.backend,
                 "command": sys.executable,
-                # Absolute paths: the Bridge spawns the backend with cwd set to
-                # the temporary workspace, so relative paths would not resolve.
-                "args": [str(FAKE_AGENT_PATH), str(Path(scenario.transcript_path()).resolve())],
+                # The Bridge spawns the backend with cwd set to the temporary
+                # workspace, so the fake Agent must be importable as a module:
+                # PYTHONPATH below points at the repository root. The
+                # transcript path stays absolute for the same reason.
+                "args": [
+                    "-m", "tests.e2e.shared.fake_acp_agent",
+                    str(transcript_path_for(scenario).resolve()),
+                ],
             }
         },
     }
@@ -538,7 +390,13 @@ def run_integration(
     """Run one Scenario against the real Bridge; never raises for assertion failures."""
     env = env if env is not None else os.environ
     scenario = load_scenario(scenario_dir)
-    transcript = load_transcript(scenario.transcript_path())
+    transcript_file = transcript_path_for(scenario)
+    if not transcript_file.is_file():
+        raise RuntimeError(
+            f"IM Integration transcript not found: {transcript_file} "
+            f"(expected tests/e2e/im_integration/transcripts/<scenario-name>.yaml)"
+        )
+    transcript = load_transcript(transcript_file)
     if not transcript.participant_replies:
         raise RuntimeError(
             "IM Integration transcript must define participant_replies and end_turn steps"
@@ -548,11 +406,8 @@ def run_integration(
         creds = feishu_credentials(env, repo_cwd=os.getcwd())
         if participant is None:
             # Imported lazily because Participant adapters use the verifier in
-            # this module. Runtime import keeps that dependency acyclic.
-            try:
-                from .participants import ParticipantConfigError, participant_from_env
-            except ImportError:
-                from participants import ParticipantConfigError, participant_from_env
+            # this package. Runtime import keeps that dependency acyclic.
+            from .participants import ParticipantConfigError, participant_from_env
             try:
                 participant = participant_from_env(env)
             except ParticipantConfigError as e:
@@ -575,6 +430,15 @@ def run_integration(
         state_home = tmp / "state"
         _write_user_config(config_home, creds, scenario)
         run_env = bridge_worker_env(os.environ, config_home, state_home)
+        # The Bridge spawns the fake backend via `python -m
+        # tests.e2e.shared.fake_acp_agent` with cwd set to the temporary
+        # workspace, so the repository root must be on PYTHONPATH for the
+        # module to resolve.
+        run_env["PYTHONPATH"] = (
+            str(REPO_ROOT)
+            + os.pathsep
+            + run_env.get("PYTHONPATH", "")
+        ).rstrip(os.pathsep)
 
         start = _bridge(
             run_env,
@@ -582,7 +446,7 @@ def run_integration(
             [
                 "start",
                 f"[e2e:{scenario.name}] {scenario.requirement[:80]}",
-                "--skill", scenario.skill,
+                "--skill", scenario.skill.name,
                 "--backend", scenario.backend,
                 "--command-alias", "e2e-fake",
                 "--chat", creds["chat_id"],
@@ -622,13 +486,15 @@ def run_integration(
             root_message_id=root_message_id,
             can_post=lambda: not session_state["terminal"],
         )
+        invalid_completion = threading.Event()
+        watched_thread = _InvalidCompletionWatcher(thread, invalid_completion)
         actor_outcome = {"state": None, "error": None}
 
         def actor_work():
             run_guarded_actor(
                 actor_outcome,
                 lambda: run_scripted_participant(
-                    thread,
+                    watched_thread,
                     transcript.participant_replies,
                     scenario.timeout_seconds,
                     lambda: session_state["terminal"],
@@ -645,12 +511,42 @@ def run_integration(
         actor_thread = threading.Thread(target=actor_work, daemon=True)
         actor_thread.start()
         try:
-            final = _bridge(
-                run_env,
-                workspace,
-                ["wait", result.run_id, "--timeout", str(scenario.timeout_seconds), "--json"],
-                timeout=scenario.timeout_seconds + 180,
-            )
+            # Wait in bounded slices: when the Bridge rejects the completion
+            # marker the Session would otherwise sit idle until the idle
+            # timeout, burning the whole scenario budget for an outcome that
+            # is already determined.
+            deadline = time.monotonic() + scenario.timeout_seconds
+            while True:
+                if invalid_completion.is_set():
+                    final = _bridge(
+                        run_env,
+                        workspace,
+                        ["stop", result.run_id, "--json"],
+                        timeout=60,
+                    )
+                    result.skip_reason = (
+                        "invalid completion signal detected in Thread; "
+                        "Bridge rejected the Agent's completion marker"
+                    )
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    final = _bridge(
+                        run_env,
+                        workspace,
+                        ["status", result.run_id, "--json"],
+                        timeout=60,
+                    )
+                    break
+                slice_seconds = max(1, int(min(30, remaining)))
+                final = _bridge(
+                    run_env,
+                    workspace,
+                    ["wait", result.run_id, "--timeout", str(slice_seconds), "--json"],
+                    timeout=slice_seconds + 120,
+                )
+                if final.get("state") in ("done", "failed", "idle_timeout", "stopped"):
+                    break
         finally:
             session_state["terminal"] = True
             actor_thread.join(timeout=30)
@@ -729,7 +625,7 @@ def run_integration(
 
 def main(argv):
     if len(argv) != 2:
-        print("usage: python -m tests.e2e.im_integration <scenario_dir>", file=sys.stderr)
+        print("usage: python -m tests.e2e.shared.im_integration <scenario_dir>", file=sys.stderr)
         return 2
     result = run_integration(argv[1])
     if result.skipped:

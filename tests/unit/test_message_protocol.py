@@ -4,10 +4,10 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from tests.e2e.harness_support import participant_round_trip_assertions
-from tests.e2e.im_integration import FeishuOpenAPIVerifier
-from tests.e2e.transports import thread_message_from_api_item
-from tests.e2e.user_simulator import classify_message
+from tests.e2e.shared.harness_support import participant_round_trip_assertions
+from tests.e2e.shared.transports import thread_message_from_api_item
+from tests.e2e.shared.user_simulator import classify_message
+from tests.e2e.shared.verifier import FeishuOpenAPIVerifier
 
 
 class MessageProtocolTests(unittest.TestCase):

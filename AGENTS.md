@@ -46,7 +46,7 @@ Run at least the following after every Python code change:
 
 ```sh
 uv sync --frozen
-uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/unit/*.py
+uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/e2e/*/*.py tests/unit/*.py
 uv run --frozen python scripts/bridge.py --help
 git diff --check
 ```

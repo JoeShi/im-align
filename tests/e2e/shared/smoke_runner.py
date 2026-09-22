@@ -12,8 +12,11 @@ Layers (docs/e2e-harness-design.md):
   - Full e2e: every Agent Backend for every Scenario.
 
 Entry points:
-    python -m tests.e2e.smoke_runner <scenario_dir> --backend kiro-cli
-    python -m tests.e2e.smoke_runner <scenario_dir> --backends all
+    python -m tests.e2e.shared.smoke_runner <scenario_dir> --backend kiro-cli
+    python -m tests.e2e.shared.smoke_runner <scenario_dir> --backends all
+
+The documented way to invoke these is tests/e2e/backend_smoke/run.sh and
+tests/e2e/full_e2e/run.sh.
 
 Credentials come only from the environment: E2E_BRIDGE_* for the Feishu/Lark
 Bridge app, E2E_SIMULATOR_* for the as-user Participant identity (the only
@@ -35,16 +38,15 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tests.e2e.harness_support import (
+from .harness_support import (
     bridge_worker_env,
     participant_round_trip_assertions,
     run_guarded_actor as run_guarded_simulator,
     wait_for_root_message,
 )
-from tests.e2e.im_integration import (
+from .im_integration import (
     IntegrationSkip,
     SeedCloner,
-    ThreadVerifier,
     _bridge,
     _write_user_config,
     check_artifacts,
@@ -53,16 +55,17 @@ from tests.e2e.im_integration import (
     materialize_seed,
     snapshot_git,
 )
-from tests.e2e.run_evaluator import evaluate_run
-from tests.e2e.scenario import SUPPORTED_BACKENDS, Scenario, load_scenario
-from tests.e2e.participants import ParticipantConfigError, participant_from_env
-from tests.e2e.skill_bundle import SkillBundleError, install_skill_bundle
-from tests.e2e.smoke_diagnostics import SmokeDiagnostics
-from tests.e2e.transports import (
+from .run_evaluator import evaluate_run
+from .scenario import SUPPORTED_BACKENDS, Scenario, load_scenario
+from .participants import ParticipantConfigError, participant_from_env
+from .skill_bundle import SkillBundleError, install_skill_bundle
+from .smoke_diagnostics import SmokeDiagnostics
+from .transports import (
     evaluator_llm_from_env,
     simulator_llm_from_env,
 )
-from tests.e2e.user_simulator import SimulatorState, build_graph, transcript_export
+from .user_simulator import SimulatorState, build_graph, transcript_export
+from .verifier import ThreadVerifier
 
 ALL_BACKENDS = list(SUPPORTED_BACKENDS)
 
@@ -323,7 +326,7 @@ def _run_smoke(
         [
             "start",
             scenario.requirement,
-            "--skill", scenario.skill,
+            "--skill", scenario.skill.name,
             "--backend", backend,
             "--chat", creds["chat_id"],
             "--json",

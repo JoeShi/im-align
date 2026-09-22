@@ -29,9 +29,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      # The smoke harness installs the pinned Skill Bundle per isolated
-      # workspace. The self-hosted runner must provide node/npm; keep the
-      # installer version and bundle source in tests/e2e/skill-bundles.yaml.
+      # The smoke harness installs the Skill Bundle each Scenario declares in
+      # its skill: mapping per isolated workspace. The self-hosted runner must
+      # provide node/npm; bundle source, ref, and installer version are pinned
+      # per Scenario, so no shared manifest is needed.
       - run: uv sync --frozen
       - name: Refresh test-user OAuth token
         env:
@@ -51,7 +52,7 @@ jobs:
           E2E_EVALUATOR_LLM_BASE_URL: ${{ secrets.E2E_EVALUATOR_LLM_BASE_URL }}
           E2E_EVALUATOR_LLM_API_KEY: ${{ secrets.E2E_EVALUATOR_LLM_API_KEY }}
           E2E_EVALUATOR_LLM_MODEL: ${{ secrets.E2E_EVALUATOR_LLM_MODEL }}
-        run: uv run --frozen python -m tests.e2e.smoke_runner tests/e2e/scenarios/todo-greenfield --backend opencode --strict
+        run: ./tests/e2e/backend_smoke/run.sh
       - name: Upload L3 diagnostics
         if: always()
         uses: actions/upload-artifact@v4

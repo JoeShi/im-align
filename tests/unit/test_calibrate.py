@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 
 from tests.e2e.calibrate import agreement_stats, calibrate, load_run_dir
-from tests.e2e.im_integration import IntegrationSkip
-from tests.e2e.transports import FakeEvaluatorLLM
+from tests.e2e.shared.im_integration import IntegrationSkip
+from tests.e2e.shared.transports import FakeEvaluatorLLM
 
 
 def write_run(run_dir: Path, run_id: str, dimensions=("dim_a", "dim_b")):

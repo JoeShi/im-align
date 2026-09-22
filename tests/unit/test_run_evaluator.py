@@ -3,9 +3,9 @@
 import unittest
 from pathlib import Path
 
-from tests.e2e.run_evaluator import evaluate_run
-from tests.e2e.scenario import load_scenario
-from tests.e2e.transports import FakeEvaluatorLLM
+from tests.e2e.shared.run_evaluator import evaluate_run
+from tests.e2e.shared.scenario import load_scenario
+from tests.e2e.shared.transports import FakeEvaluatorLLM
 
 SCENARIO_DIR = Path(__file__).resolve().parents[1] / "e2e" / "scenarios" / "todo-greenfield"
 

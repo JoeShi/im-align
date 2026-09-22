@@ -5,9 +5,9 @@ im-align verification is organized into four layers, from hermetic unit tests to
 | Layer | Command | Credentials |
 |---|---|---|
 | L1 Unit | `uv run --frozen python -m unittest discover -s tests/unit -t .` | none |
-| L2 IM Integration | `uv run --frozen python -m tests.e2e.im_integration tests/e2e/scenarios/todo-greenfield` | Feishu/Lark app + test group + test-user token |
-| L3 Backend Smoke | `uv run --frozen python -m tests.e2e.smoke_runner <scenario> --backend kiro-cli` | L2 set + backend binary + two LLM sets |
-| L4 Full e2e | `uv run --frozen python -m tests.e2e.smoke_runner <scenario...> --backends all` | L3 set for every Agent Backend |
+| L2 IM Integration | `./tests/e2e/im_integration/run.sh` | Feishu/Lark app + test group + test-user token |
+| L3 Backend Smoke | `./tests/e2e/backend_smoke/run.sh` (edit the script to change backend/flags) | L2 set + backend binary + two LLM sets |
+| L4 Full e2e | `./tests/e2e/full_e2e/run.sh` | L3 set for every Agent Backend |
 
 ## L1: Unit Tests
 
@@ -17,7 +17,7 @@ im-align verification is organized into four layers, from hermetic unit tests to
 
 ```sh
 uv sync --frozen
-uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/unit/*.py
+uv run --frozen python -m py_compile scripts/bridge.py scripts/im_align/*.py scripts/im_align/acp/*.py scripts/im_align/im_providers/*.py tests/e2e/*.py tests/e2e/*/*.py tests/unit/*.py
 uv run --frozen python scripts/bridge.py --help
 uv run --frozen python -m unittest discover -s tests/unit -t .
 git diff --check
@@ -25,7 +25,7 @@ git diff --check
 
 **Prerequisites.** None. No credential is read at any point.
 
-L1 runs entirely against fake boundaries: unit tests must never send messages to a real group, and the harness fakes (`FakeThreadTransport`, `FakeSimulatorLLM`, `FakeEvaluatorLLM`, `fake_acp_agent.py`) keep every network seam injectable. Test writing conventions live in `docs/steering/unit-test.md`.
+L1 runs entirely against fake boundaries: unit tests must never send messages to a real group, and the harness fakes (`FakeThreadTransport`, `FakeSimulatorLLM`, `FakeEvaluatorLLM`, `tests/e2e/shared/fake_acp_agent.py`) keep every network seam injectable. Test writing conventions live in `docs/steering/unit-test.md`.
 
 **When prerequisites are missing.** Not applicable; there are no prerequisites.
 
@@ -33,12 +33,12 @@ L1 runs entirely against fake boundaries: unit tests must never send messages to
 
 ## L2: IM Integration
 
-**Purpose.** The real Bridge against a real Feishu/Lark Thread, with the Agent Backend replaced by the scripted multi-Turn transcript fake (`tests/e2e/fake_acp_agent.py`). The fixed Participant reply is posted under a test-user identity and must receive the Bridge emoji acknowledgement and drive Turn 2 before completion. The layer also asserts expected artifacts, `status --json` state, no branch/commit/push, completion card present, and zero Approval cards (ADR-0005 happy path).
+**Purpose.** The real Bridge against a real Feishu/Lark Thread, with the Agent Backend replaced by the scripted multi-Turn transcript fake (`tests/e2e/shared/fake_acp_agent.py`). The fixed Participant reply is posted under a test-user identity and must receive the Bridge emoji acknowledgement and drive Turn 2 before completion. The layer also asserts expected artifacts, `status --json` state, no branch/commit/push, completion card present, and zero Approval cards (ADR-0005 happy path).
 
 **How to run.**
 
 ```sh
-uv run --frozen python -m tests.e2e.im_integration tests/e2e/scenarios/todo-greenfield
+./tests/e2e/im_integration/run.sh
 ```
 
 **Prerequisites.** Environment variables `E2E_BRIDGE_FEISHU_APP_ID`, `E2E_BRIDGE_FEISHU_APP_SECRET`, `E2E_BRIDGE_CHAT_ID` (a dedicated test group), and a fresh `E2E_SIMULATOR_USER_ACCESS_TOKEN` for the dedicated test user. Local runs supply the access token directly; CI mints it immediately before the test from `E2E_SIMULATOR_USER_REFRESH_TOKEN`. The refresh token must have been issued for the same app ID. The Bridge app needs the long-connection event `im.message.receive_v1` and the scopes in `references/lark-scopes.json`. The user token posts the scripted reply and performs every Thread/reaction verification; Bridge credentials are never used for those reads. When `E2E_BRIDGE_CHAT_ID` is unset, the harness falls back to `im.chat_id` in the launching repository's `.im-align.yaml`.
@@ -54,19 +54,20 @@ uv run --frozen python -m tests.e2e.im_integration tests/e2e/scenarios/todo-gree
 **How to run.**
 
 ```sh
-uv run --frozen python -m tests.e2e.smoke_runner tests/e2e/scenarios/todo-greenfield --backend opencode --strict
+./tests/e2e/backend_smoke/run.sh
 ```
 
-`--backend` accepts one of `opencode`, `trae-cli`, `kiro-cli`, `kimi` (the binary must be installed and authenticated; see `docs/steering/e2e-test.md` for backend-specific notes).
+The script pins one backend and `--strict`; edit it to change the target. `--backend` accepts one of `opencode`, `trae-cli`, `kiro-cli`, `kimi` (the binary must be installed and authenticated; see `docs/steering/e2e-test.md` for backend-specific notes).
 
 The User Simulator always runs under the dedicated test-user identity (`as-user`); it is the only Participant Mode. ADR-0009 measured that the platform never delivers bot-originated messages to the Bridge event stream, so a bot participant can never drive a Turn and ADR-0010 removed the harness `bot` mode entirely.
 
 **Prerequisites.** Everything L2 needs, plus:
 
 - the selected Agent Backend binary on `PATH`;
-- `node`/`npx` and `gh` on `PATH`; before each tuple the harness installs the pinned
-  Skill Bundle from `tests/e2e/skill-bundles.yaml` into the isolated workspace,
-  while the CI token-refresh step uses `gh secret set` to persist rotation;
+- `node`/`npx` and `gh` on `PATH`; before each tuple the harness installs the
+  Skill Bundle declared in the Scenario's `skill:` mapping into the isolated
+  workspace, while the CI token-refresh step uses `gh secret set` to persist
+  rotation;
 - Participant credentials: `E2E_SIMULATOR_USER_ACCESS_TOKEN`;
 - the harness resolves the Bridge bot open_id from the L2 app credentials so the
   simulator can mention it. `E2E_BRIDGE_BOT_OPEN_ID` is an optional override for
@@ -87,7 +88,7 @@ Optional: `E2E_RUNS_DIR` overrides the archive root; the default is `$XDG_STATE_
 **How to run.**
 
 ```sh
-uv run --frozen python -m tests.e2e.smoke_runner tests/e2e/scenarios/todo-greenfield --backends all
+./tests/e2e/full_e2e/run.sh
 ```
 
 **Prerequisites.** The supported L3 credential set plus all four backend binaries (`opencode`, `trae-cli`, `kiro-cli`, `kimi`) installed and authenticated. Brownfield scenarios additionally clone a public `seed_repo` pinned to a full commit SHA (network access to the seed host).

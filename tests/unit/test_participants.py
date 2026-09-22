@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from tests.e2e.participants import ParticipantConfigError, participant_from_env
+from tests.e2e.shared.participants import ParticipantConfigError, participant_from_env
 
 
 class FakeResponse:

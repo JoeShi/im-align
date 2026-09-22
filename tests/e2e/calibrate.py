@@ -20,9 +20,9 @@ import os
 import sys
 from pathlib import Path
 
-from tests.e2e.im_integration import IntegrationSkip
-from tests.e2e.run_evaluator import evaluate_run
-from tests.e2e.transports import evaluator_llm_from_env
+from .shared.im_integration import IntegrationSkip
+from .shared.run_evaluator import evaluate_run
+from .shared.transports import evaluator_llm_from_env
 
 DEFAULT_THRESHOLD = 0.8
 
